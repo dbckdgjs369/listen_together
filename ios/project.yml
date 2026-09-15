@@ -1,0 +1,56 @@
+name: ListenTogether
+options:
+  bundleIdPrefix: com.example.lt
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+targets:
+
+  LTHost:
+    type: application
+    platform: iOS
+    sources:
+      - LTHost
+      - LTShared
+    info:
+      path: LTHost/Info.plist
+      properties:
+        CFBundleDisplayName: 같이듣기
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # 없으면 UDP 브로드캐스트가 조용히 실패한다. 권한 창 문구이기도 하다.
+        NSLocalNetworkUsageDescription: 같은 와이파이에 있는 친구에게 소리를 보내려면 로컬 네트워크 접근이 필요합니다.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.lt
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+    dependencies:
+      - target: LTBroadcast
+        embed: true
+
+  LTBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - LTBroadcast
+      - LTShared
+    info:
+      path: LTBroadcast/Info.plist
+      properties:
+        CFBundleDisplayName: 같이듣기
+        NSLocalNetworkUsageDescription: 같은 와이파이에 있는 친구에게 소리를 보내려면 로컬 네트워크 접근이 필요합니다.
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: BroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        # HostViewController 의 preferredExtension 과 반드시 같아야 한다.
+        # 다르면 피커 목록에 우리 확장이 아예 안 뜬다.
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.lt.broadcast
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"

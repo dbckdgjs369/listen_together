@@ -6,3 +6,11 @@ local.properties
 .idea/
 *.iml
 captures/
+
+# iOS — xcodeproj 는 project.yml 에서 xcodegen 으로 생성한다
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+.swiftpm/
+ios/*/Info.plist
