@@ -62,10 +62,18 @@ public class PlayerService extends Service {
         Intent stop = new Intent(this, PlayerService.class).setAction(CaptureService.ACTION_STOP);
         android.app.PendingIntent pi = android.app.PendingIntent.getService(this, 1, stop,
                 android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+        // 알림을 누르면 앱으로 돌아온다.
+        Intent open = new Intent(this, MainActivity.class)
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        android.app.PendingIntent openPi = android.app.PendingIntent.getActivity(this, 0, open,
+                android.app.PendingIntent.FLAG_IMMUTABLE
+                        | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+
         Notification n = new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("같이 듣는 중")
                 .setContentText(host)
                 .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentIntent(openPi)
                 .addAction(new Notification.Action.Builder(null, "나가기", pi).build())
                 .setOngoing(true)
                 .build();

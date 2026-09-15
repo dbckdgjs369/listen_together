@@ -235,10 +235,18 @@ public class CaptureService extends Service {
         Intent stop = new Intent(this, CaptureService.class).setAction(ACTION_STOP);
         PendingIntent pi = PendingIntent.getService(this, 0, stop,
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        // 알림을 누르면 앱으로 돌아온다. SINGLE_TOP 이라 이미 떠 있으면 새로 만들지 않는다.
+        Intent open = new Intent(this, MainActivity.class)
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent openPi = PendingIntent.getActivity(this, 0, open,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
         Notification n = new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("같이듣기 — 내 소리 공유 중")
                 .setContentText("http://" + MainActivity.localIp() + ":" + PORT)
                 .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentIntent(openPi)
                 .addAction(new Notification.Action.Builder(null, "공유 중지", pi).build())
                 .setOngoing(true)
                 .build();
