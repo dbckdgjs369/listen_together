@@ -10,6 +10,7 @@ import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioPlaybackCaptureConfiguration;
 import android.media.AudioRecord;
+import android.media.AudioTrack;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.net.wifi.WifiManager;
@@ -76,6 +77,7 @@ public class CaptureService extends Service {
 
     private MediaProjection projection;
     private AudioRecord record;
+    private AudioTrack keepAlive;
     private ServerSocket server;
     private volatile boolean running;
 
@@ -186,6 +188,7 @@ public class CaptureService extends Service {
 
         running = true;
         acquireLocks();
+        startKeepAliveTrack();
         startCapture();
         startServer();
         startBeacon();
@@ -253,6 +256,51 @@ public class CaptureService extends Service {
             }
         } else {
             startForeground(1, n);
+        }
+    }
+
+    /**
+     * 무음을 계속 출력해서 우리를 "소리를 내고 있는 앱"으로 만든다.
+     *
+     * 캡처 스레드가 포그라운드 서비스인데도 cpu:/background 로 강등되는 게 끊김의
+     * 원인인데, 버퍼·우선순위·FGS 타입으로는 전부 못 풀었다(실측). 남은 가설은
+     * 제조사 정책이 "실제로 오디오를 출력 중인 프로세스"는 다르게 취급한다는 것이다.
+     *
+     * 출력은 전부 0이라 아무도 못 듣는다. 우리 캡처 믹스에 섞여도 0을 더하는 것뿐이다.
+     * 이게 cgroup 을 바꾸지 못하면 미련 없이 걷어내면 된다.
+     */
+    private void startKeepAliveTrack() {
+        try {
+            int min = AudioTrack.getMinBufferSize(
+                    SAMPLE_RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT);
+            keepAlive = new AudioTrack.Builder()
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build())
+                    .setAudioFormat(new AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(SAMPLE_RATE)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                            .build())
+                    .setBufferSizeInBytes(min * 2)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build();
+            keepAlive.setVolume(0f);
+            keepAlive.play();
+
+            final byte[] zeros = new byte[min];
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    // write() 가 AudioTrack 소비 속도에 맞춰 알아서 블록해준다.
+                    while (running) {
+                        if (keepAlive.write(zeros, 0, zeros.length) < 0) break;
+                    }
+                }
+            }, "lt-keepalive").start();
+            Log.i(TAG, "keepalive 무음 트랙 재생 시작");
+        } catch (Exception e) {
+            Log.w(TAG, "keepalive 실패(무시하고 진행): " + e);
         }
     }
 
@@ -365,6 +413,10 @@ public class CaptureService extends Service {
         final long targetNanos = 100_000_000L;
         PerformanceHintManager.Session hint = createHintSession(targetNanos);
 
+        // 무음 채우기용. 한 청크(0.1초)만큼의 0.
+        final byte[] silence = new byte[bufSize];
+        long filledBytes = 0;
+
         long readBytes = 0;
         while (running) {
             long iterStart = System.nanoTime();
@@ -374,6 +426,29 @@ public class CaptureService extends Service {
 
             // 보내는 게 먼저다. 계측은 그 다음.
             broadcast(buf, read);
+
+            // 스레드가 밀린 만큼 무음을 끼워넣어 스트림의 시간을 보존한다.
+            //
+            // 사라진 소리는 살릴 수 없다. 하지만 지금은 소리와 함께 '시간'까지
+            // 사라져서, 받는 쪽 <audio> 가 언더런으로 재버퍼링에 들어간다.
+            // 그래서 1초 구멍이 청취자에게는 몇 초 버벅임이 된다.
+            // 빈 만큼 0을 밀어넣으면 1초 구멍은 1초로 끝난다.
+            //
+            // 누적 기준(스트림 시작 시각)이 아니라 이번 한 바퀴만 본다.
+            // 누적으로 하면 샘플레이트 오차 ±2% 가 쌓여 멀쩡할 때도 무음이 끼어든다.
+            long iterNanos = System.nanoTime() - iterStart;
+            long shortfall = BYTES_PER_SEC * iterNanos / 1_000_000_000L - read;
+            if (shortfall > BYTES_PER_SEC / 5) {          // 0.2초 넘게 빈 경우만
+                shortfall = Math.min(shortfall, BYTES_PER_SEC * 5);   // 폭주 방지
+                int frame = CHANNELS * BITS / 8;
+                long fill = shortfall - shortfall % frame;            // 프레임 정렬
+                while (fill > 0) {
+                    int n = (int) Math.min(fill, silence.length);
+                    broadcast(silence, n);
+                    filledBytes += n;
+                    fill -= n;
+                }
+            }
 
             // 검증용 계측이 실시간 경로를 무겁게 만들면 안 된다.
             // 전 샘플(초당 88,200회) 대신 16개마다 하나만 본다 — RMS/피크 판정에는 충분하다.
@@ -412,13 +487,18 @@ public class CaptureService extends Service {
                     net.append(String.format("  net=%d%% drop=%d", netPct, d));
                 }
 
+                // fill: 우리가 끼워넣은 무음 (cap 이 빈 자리를 메운 양).
+                // 이게 생기면 net 은 100% 로 돌아온다 — 소리는 잃었어도 시간은 안 잃었다는 뜻이다.
+                int fillPct = expected > 0 ? (int) (filledBytes * 100 / expected) : 0;
+
                 Log.i(TAG, String.format(
-                        "AUDIO rms=%5d peak=%5d clients=%d gap=%dms cap=%d%%%s%s",
-                        rms, windowPeak, clients.size(), gapMs, capPct,
+                        "AUDIO rms=%5d peak=%5d clients=%d gap=%dms cap=%d%% fill=%d%%%s%s",
+                        rms, windowPeak, clients.size(), gapMs, capPct, fillPct,
                         net.toString(),
                         capPct < 95 ? "  <<< 캡처 유실" : ""));
                 windowSamples = 0; windowSumSq = 0; windowPeak = 0;
                 readBytes = 0;
+                filledBytes = 0;
                 lastLog = now;
             }
         }
@@ -614,6 +694,7 @@ public class CaptureService extends Service {
         for (Client c : clients) c.close();
         clients.clear();
         if (record != null) { try { record.stop(); record.release(); } catch (Exception ignored) { } }
+        if (keepAlive != null) { try { keepAlive.stop(); keepAlive.release(); } catch (Exception ignored) { } }
         if (projection != null) projection.stop();
         releaseLocks();
         Log.i(TAG, "service destroyed");
