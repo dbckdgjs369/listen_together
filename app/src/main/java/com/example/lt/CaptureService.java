@@ -65,15 +65,24 @@ public class CaptureService extends Service {
     private static final int BYTES_PER_SEC = SAMPLE_RATE * CHANNELS * BITS / 8;
 
     /**
-     * 청크 1개 ≈ 0.1초. 50개 = 5초.
+     * 캡처를 읽어 보내는 단위. **이게 곧 청취자 지연의 한 축이다.**
      *
-     * 링버퍼(3초)보다 반드시 커야 한다. 스레드가 밀렸다 풀리는 순간 read() 가 밀린
+     * 0.1초였을 때 총 지연이 약 250ms 였고, 그중 100ms 가 여기였다.
+     * 20ms 로 줄이면 그만큼 바로 깎인다. 대신 같은 시간에 패킷이 5배로 늘어난다.
+     */
+    private static final int CHUNK_MS = 20;
+
+    /**
+     * 큐는 **시간**으로 5초를 유지한다. 개수로 고정하면 안 된다 —
+     * CHUNK_MS 를 줄이는 순간 큐가 같이 쪼그라들어 링버퍼(3초)보다 작아진다.
+     *
+     * 링버퍼보다 반드시 커야 한다. 스레드가 밀렸다 풀리는 순간 read() 가 밀린
      * 3초치를 연달아 뱉는데, 큐가 그보다 작으면 우리가 그걸 버린다 —
      * 링버퍼를 키운 효과가 바로 그 자리에서 사라진다.
      */
-    private static final int QUEUE_CHUNKS = 50;
+    private static final int QUEUE_CHUNKS = 5000 / CHUNK_MS;
     /** 5초치를 연속으로 버린 클라이언트는 사실상 죽은 것으로 보고 끊는다. */
-    private static final int MAX_DROPS = 50;
+    private static final int MAX_DROPS = QUEUE_CHUNKS;
 
     private MediaProjection projection;
     private AudioRecord record;
@@ -357,9 +366,10 @@ public class CaptureService extends Service {
         // 상위 제약이라 우선순위로는 풀리지 않는다 — 버퍼로 버티는 수밖에 없다.
         // 0.5초로는 부족했고(실측), 3초면 관측된 최대 스톨(2.4초)을 덮는다. 비용은 530KB.
         //
-        // 읽는 단위 0.1초: 여유와 무관하게 자주 읽으므로 지연은 그대로다.
+        // 링버퍼 크기와 읽는 단위는 별개다. 링은 "밀렸을 때 버틸 여유",
+        // 청크는 "평소 지연". 그래서 링은 크게, 청크는 작게 간다.
         int ringSize = Math.max(minBuf * 2, BYTES_PER_SEC * 3);
-        final int chunkSize = BYTES_PER_SEC / 10;
+        final int chunkSize = BYTES_PER_SEC * CHUNK_MS / 1000;
 
         record = new AudioRecord.Builder()
                 .setAudioFormat(format)
@@ -375,7 +385,8 @@ public class CaptureService extends Service {
         Log.i(TAG, "capture started, state=" + record.getRecordingState()
                 + " ring요청=" + (ringSize * 1000 / BYTES_PER_SEC) + "ms"
                 + " ring실제=" + actualMs + "ms(" + actualFrames + "프레임)"
-                + " chunk=" + chunkSize
+                + " chunk=" + CHUNK_MS + "ms(" + chunkSize + "B)"
+                + " queue=" + QUEUE_CHUNKS + "개=" + (QUEUE_CHUNKS * CHUNK_MS) + "ms"
                 + (actualMs < 1000 ? "  <<< 버퍼 요청이 잘렸다" : ""));
 
         new Thread(new Runnable() {
@@ -389,7 +400,7 @@ public class CaptureService extends Service {
     }
 
     /**
-     * 스케줄러에게 "이 스레드는 0.1초마다 깨어나야 한다"고 알린다.
+     * 스케줄러에게 "이 스레드는 CHUNK_MS 마다 깨어나야 한다"고 알린다.
      *
      * cgroup 강등을 우회하는 공식 경로다(ADPF, API 31+). 목표 시간을 넘긴 작업을
      * 보고하면 커널이 주파수·코어 배치를 올려준다. 그래픽용으로 만들어진 API라
@@ -417,11 +428,11 @@ public class CaptureService extends Service {
         int windowPeak = 0;
         long lastLog = System.nanoTime();
 
-        // 청크 1개 = 0.1초. 이 주기를 지켜야 한다고 스케줄러에게 알린다.
-        final long targetNanos = 100_000_000L;
+        // 청크 1개를 읽는 주기를 지켜야 한다고 스케줄러에게 알린다.
+        final long targetNanos = CHUNK_MS * 1_000_000L;
         PerformanceHintManager.Session hint = createHintSession(targetNanos);
 
-        // 무음 채우기용. 한 청크(0.1초)만큼의 0.
+        // 무음 채우기용. 한 청크만큼의 0.
         final byte[] silence = new byte[bufSize];
         long filledBytes = 0;
 
