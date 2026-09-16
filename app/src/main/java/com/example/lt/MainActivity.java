@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.media.projection.MediaProjectionConfig;
 import android.media.projection.MediaProjectionManager;
@@ -25,6 +26,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -72,6 +74,9 @@ public class MainActivity extends Activity {
     private TextView status;
     /** 청취 상태 한 줄 — PlayerService 가 쓰는 값을 그대로 비춘다. */
     private TextView joining;
+    /** 핫스팟 접속용 QR. 꺼져 있을 땐 숨긴다. */
+    private ImageView qr;
+    private TextView qrHint;
     private LinearLayout found;
     private EditText manual;
 
@@ -120,12 +125,23 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) { askIgnoreBatteryOptimization(); }
         }));
 
-        root.addView(button("핫스팟 켜기 (테스트)", new View.OnClickListener() {
+        root.addView(button("핫스팟 켜기 (Wi-Fi 없을 때)", new View.OnClickListener() {
             @Override public void onClick(View v) { tryLocalHotspot(); }
         }));
+
+        // 핫스팟이 켜지면 여기에 QR 이 뜬다. 상대는 기본 카메라로 찍기만 하면 된다.
+        qr = new ImageView(this);
+        qr.setAdjustViewBounds(true);
+        qr.setVisibility(View.GONE);
+        root.addView(qr);
+        qrHint = hint("");
+        qrHint.setVisibility(View.GONE);
+        root.addView(qrHint);
+
         root.addView(button("핫스팟 끄기", new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (reservation != null) { reservation.close(); reservation = null; }
+                showQr(null, null);
                 render("핫스팟을 껐습니다");
             }
         }));
@@ -388,7 +404,68 @@ public class MainActivity extends Activity {
 
     private static WifiManager.LocalOnlyHotspotReservation reservation;
 
+    /**
+     * 핫스팟 접속 QR 을 띄운다. ssid 가 null 이면 감춘다.
+     *
+     * `WIFI:T:WPA;S:이름;P:비번;;` 는 안드로이드가 시스템 차원에서 아는 포맷이라,
+     * 상대는 **기본 카메라로 찍기만 하면** 접속 알림이 뜬다. 앱도 필요 없다.
+     * SSID·비번을 불러주고 받아적게 하는 것과는 마찰이 비교가 안 된다.
+     */
+    private void showQr(String ssid, String pw) {
+        if (qr == null) return;
+        if (ssid == null) {
+            qr.setVisibility(View.GONE);
+            qrHint.setVisibility(View.GONE);
+            qr.setImageBitmap(null);
+            return;
+        }
+        // 값 안의 `;` `:` `\` `,` 는 이 포맷에서 구분자라 escape 해야 한다.
+        // LocalOnlyHotspot 비번은 영숫자뿐이라 지금은 걸릴 일이 없지만,
+        // 사용자가 SSID 를 정하게 되는 순간 조용히 깨질 자리다.
+        String payload = "WIFI:T:WPA;S:" + qrEscape(ssid) + ";P:" + qrEscape(pw) + ";;";
+        try {
+            int size = 640;
+            com.google.zxing.common.BitMatrix m = new com.google.zxing.qrcode.QRCodeWriter()
+                    .encode(payload, com.google.zxing.BarcodeFormat.QR_CODE, size, size);
+            Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565);
+            for (int y = 0; y < size; y++) {
+                for (int x = 0; x < size; x++) {
+                    bmp.setPixel(x, y, m.get(x, y) ? 0xFF000000 : 0xFFFFFFFF);
+                }
+            }
+            qr.setImageBitmap(bmp);
+            qr.setVisibility(View.VISIBLE);
+            qrHint.setText("친구 카메라로 이 QR 을 찍으면 접속됩니다."
+                    + "\n안 되면 직접: " + ssid + " / " + pw);
+            qrHint.setVisibility(View.VISIBLE);
+        } catch (Throwable t) {
+            Log.w(CaptureService.TAG, "QR 생성 실패: " + t);
+            qr.setVisibility(View.GONE);
+            qrHint.setText("QR 생성 실패 — 직접 입력: " + ssid + " / " + pw);
+            qrHint.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private static String qrEscape(String s) {
+        return s.replace("\\", "\\\\").replace(";", "\\;")
+                .replace(",", "\\,").replace(":", "\\:").replace("\"", "\\\"");
+    }
+
     private void tryLocalHotspot() {
+        // 이미 켜져 있으면 다시 요청하지 않는다. 그냥 부르면 시스템이
+        // IllegalStateException("Caller already has an active LocalOnlyHotspot request")
+        // 를 던진다 — 버튼을 두 번 누른 것뿐인데 예외가 나던 자리다.
+        if (reservation != null) {
+            try {
+                SoftApConfiguration c = reservation.getSoftApConfiguration();
+                showQr(String.valueOf(c.getSsid()), String.valueOf(c.getPassphrase()));
+                render("핫스팟은 이미 켜져 있습니다");
+            } catch (Throwable t) {
+                render("핫스팟은 켜져 있으나 설정을 읽을 수 없습니다 — " + t);
+            }
+            return;
+        }
+
         // API 33+ 는 NEARBY_WIFI_DEVICES 가 런타임 권한이다. 없으면 SecurityException.
         String[] need = Build.VERSION.SDK_INT >= 33
                 ? new String[]{Manifest.permission.NEARBY_WIFI_DEVICES,
@@ -416,8 +493,11 @@ public class MainActivity extends Activity {
                         ssid = "설정을 읽을 수 없음: " + t;
                     }
                     Log.i(CaptureService.TAG, "HOTSPOT ok ssid=" + ssid + " pw=" + pw);
-                    render("핫스팟 켜짐\nSSID: " + ssid + "\n비번: " + pw
-                            + "\nQR: WIFI:T:WPA;S:" + ssid + ";P:" + pw + ";;");
+                    render("핫스팟 켜짐");
+                    final String s = ssid, p = pw;
+                    ui.post(new Runnable() {
+                        @Override public void run() { showQr(s, p); }
+                    });
                 }
 
                 @Override

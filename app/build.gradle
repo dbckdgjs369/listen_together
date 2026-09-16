@@ -25,3 +25,12 @@ android {
         }
     }
 }
+
+dependencies {
+    // 유일한 외부 의존성. 안드로이드에는 QR **생성** API 가 없고, 직접 짜면
+    // Reed-Solomon 오류정정에 마스크 선택까지 400줄이 넘는다. 틀려도 티가 안 나는
+    // 종류의 코드라 검증 비용이 더 크다.
+    //
+    // 핫스팟 SSID·비번을 손으로 옮겨 적게 하는 건 이 앱이 팔려는 것과 정반대다.
+    implementation 'com.google.zxing:core:3.5.3'
+}
