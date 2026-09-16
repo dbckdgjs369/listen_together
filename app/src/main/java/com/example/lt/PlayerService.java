@@ -9,6 +9,7 @@ import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioTimestamp;
 import android.media.AudioTrack;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -29,6 +30,17 @@ public class PlayerService extends Service {
     public static final String TAG = CaptureService.TAG;
     public static final String EXTRA_HOST = "host";
     private static final String CHANNEL_ID = "lt_player";
+
+    /**
+     * AudioTrack 버퍼를 minBuf 의 몇 배로 잡을지. **청취자 지연의 지배적 항목이다.**
+     *
+     * 2배(160ms)일 때 실측 true=217ms 였다. 그 아래 믹서·HAL 은 57ms 뿐이라
+     * 줄일 여지는 거의 전부 여기에 있다.
+     *
+     * 대신 이게 Wi-Fi 가 흔들릴 때 버티는 여유이기도 하다. 줄이면 `under` 가
+     * 올라가고, 그건 지연보다 나쁘다. **`under` 가 0 을 유지하는 선까지만 내린다.**
+     */
+    private static final int BUFFER_MULT = 1;
 
     private volatile boolean running;
     private Socket sock;
@@ -123,15 +135,31 @@ public class PlayerService extends Service {
                         .setSampleRate(44100)
                         .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                         .build())
-                .setBufferSizeInBytes(minBuf * 2)
+                .setBufferSizeInBytes(minBuf * BUFFER_MULT)
                 .setTransferMode(AudioTrack.MODE_STREAM)
+                // 안드로이드 고속 경로(fast mixer)를 요청한다. 통과하면 출력 버퍼가
+                // 크게 줄어든다. 다만 조건이 "샘플레이트가 기기 네이티브와 일치"인데
+                // 우리는 44100 이고 기기는 대개 48000 이라 **거부될 가능성이 높다**.
+                // 거부돼도 손해는 없고, 거부당했다는 사실이 48kHz 전환의 근거가 된다.
+                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                 .build();
         track.play();
-        // 요청한 버퍼가 그대로 잡혔는지 확인한다. 캡처 쪽은 HAL 이 3초 요청을 69ms 로
+
+        // 요청한 값이 그대로 잡혔는지 확인한다. 캡처 쪽은 HAL 이 3초 요청을 69ms 로
         // 잘라버린 전례가 있다 — 요청값만 믿으면 없는 여유를 있다고 착각한다.
-        Log.i(TAG, "player track: 요청=" + (minBuf * 2 / 4 * 1000 / 44100) + "ms"
+        AudioManager am = getSystemService(AudioManager.class);
+        String nativeRate = am != null
+                ? am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE) : "?";
+        String nativeBurst = am != null
+                ? am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER) : "?";
+        int mode = track.getPerformanceMode();
+        Log.i(TAG, "player track: 버퍼요청=" + (minBuf * BUFFER_MULT / 4 * 1000 / 44100) + "ms"
                 + " 실제=" + (track.getBufferSizeInFrames() * 1000 / 44100) + "ms"
-                + "(" + track.getBufferSizeInFrames() + "프레임)");
+                + "(" + track.getBufferSizeInFrames() + "프레임)"
+                + " 고속경로=" + (mode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
+                        ? "허용됨" : "거부됨(mode=" + mode + ")")
+                + " 기기네이티브=" + nativeRate + "Hz/" + nativeBurst + "프레임"
+                + " 우리=44100Hz");
 
         while (running) {
             try {
@@ -157,6 +185,7 @@ public class PlayerService extends Service {
                 long recvBytes = 0;
                 long lastLog = System.nanoTime();
                 int headAtStart = track.getPlaybackHeadPosition();
+                AudioTimestamp ts = new AudioTimestamp();
                 boolean firstChunk = true;
                 long connectedAt = System.nanoTime();
 
@@ -185,12 +214,27 @@ public class PlayerService extends Service {
                         int netPct = expected > 0 ? (int) (recvBytes * 100 / expected) : 100;
                         int under = Build.VERSION.SDK_INT >= 24 ? track.getUnderrunCount() : -1;
 
-                        // buf : 재생까지 남은 오디오 — 이게 네이티브 청취자의 체감 지연이다
-                        // net : 호스트에게서 받은 양 (실시간 대비)
+                        // buf 는 **우리 버퍼만** 센다. 그 아래 AudioFlinger 믹서·HAL·
+                        // 블루투스 코덱이 더하는 지연은 안 잡힌다 — 블루투스면 거기서만
+                        // 100~200ms 가 더 붙는다. buf 만 보고 "지연 150ms" 라고 하면
+                        // 과소평가다.
+                        //
+                        // getTimestamp() 는 "이 프레임이 이 시각에 실제로 나갔다"를 준다.
+                        // 지금 쓴 마지막 프레임이 언제 스피커로 나갈지 역산하면 그게 진짜 지연이다.
+                        long trueMs = -1;
+                        if (track.getTimestamp(ts) && ts.framePosition > 0) {
+                            long pending = writtenFrames - ts.framePosition;
+                            long presentAt = ts.nanoTime + pending * 1_000_000_000L / 44100;
+                            trueMs = (presentAt - now) / 1_000_000L;
+                        }
+
+                        // buf  : 우리 AudioTrack 에 쌓인 양
+                        // true : 스피커까지 나가는 데 걸리는 실제 지연 (-1 = 미지원)
+                        // net  : 호스트에게서 받은 양 (실시간 대비)
                         // under: 버퍼가 비어 끊긴 횟수 (누적)
                         Log.i(TAG, String.format(
-                                "PLAY buf=%dms net=%d%% under=%d gap=%dms",
-                                bufMs, netPct, under, gapMs));
+                                "PLAY buf=%dms true=%dms net=%d%% under=%d gap=%dms",
+                                bufMs, trueMs, netPct, under, gapMs));
                         recvBytes = 0;
                         lastLog = now;
                     }
