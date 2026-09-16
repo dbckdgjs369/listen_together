@@ -42,9 +42,24 @@ public class PlayerService extends Service {
      */
     private static final int BUFFER_MULT = 1;
 
+    /**
+     * 지금 듣고 있는 호스트 주소. **null 이면 청취 중이 아니다.**
+     * 화면이 이걸 읽어 "지금 누구 소리를 듣고 있는지"를 보여준다.
+     *
+     * 이게 없던 시절, 죽은 주소를 붙잡은 서비스가 뒤에서 조용히 재시도만 하는데
+     * 화면은 아무 말이 없었다. 사용자는 "나가기"를 눌러야 한다는 걸 알 길이 없었다.
+     */
+    public static volatile String currentHost;
+    /** 청취 상태 한 줄. 화면이 그대로 띄운다. */
+    public static volatile String stateText = "";
+
     private volatile boolean running;
+    /** 접속 대상. 루프가 매 회차 다시 읽으므로 도중에 갈아끼울 수 있다. */
+    private volatile String host;
     private Socket sock;
     private AudioTrack track;
+    /** 지금 track 이 물고 있는 샘플레이트. 호스트가 바뀌면 track 을 다시 만든다. */
+    private int trackRate;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
 
@@ -54,17 +69,60 @@ public class PlayerService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (running) return START_NOT_STICKY;
-        final String host = intent != null ? intent.getStringExtra(EXTRA_HOST) : null;
-        if (host == null) { stopSelf(); return START_NOT_STICKY; }
+        String want = normalizeHost(
+                intent != null ? intent.getStringExtra(EXTRA_HOST) : null);
+        if (want == null) {
+            if (!running) stopSelf();
+            return START_NOT_STICKY;
+        }
 
-        startForegroundCompat(host);
+        if (running) {
+            // 예전엔 여기서 그냥 무시했다. 그래서 한 번 잘못된 주소로 시작하면
+            // 그 뒤로 뭘 눌러도 먹히지 않았다 — 자동 발견 목록을 탭해도, 주소를
+            // 다시 입력해도. 실패한 주소를 붙잡은 서비스가 영원히 우선했다.
+            if (want.equals(host)) return START_NOT_STICKY;
+            Log.i(TAG, "player 호스트 교체: " + host + " → " + want);
+            host = want;
+            setState("연결 중…");
+            startForegroundCompat(want);
+            closeSock();     // 읽기를 끊어 루프가 새 주소로 다시 붙게 한다
+            return START_NOT_STICKY;
+        }
+
+        host = want;
+        setState("연결 중…");
+        startForegroundCompat(want);
         acquireLocks();
         running = true;
         new Thread(new Runnable() {
-            @Override public void run() { playLoop(host); }
+            @Override public void run() { playLoop(); }
         }, "lt-player").start();
         return START_NOT_STICKY;
+    }
+
+    /**
+     * 사용자가 직접 입력하는 건 대개 알림에 뜨는 `http://192.168.0.2:7980` 통째다.
+     * 그대로 넘기면 **그런 이름의 서버를 찾다가** UnknownHostException 이 난다 —
+     * 포트는 이미 CaptureService.PORT 로 따로 주고 있으니 앞뒤 장식은 방해물이다.
+     */
+    static String normalizeHost(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        int scheme = s.indexOf("://");
+        if (scheme >= 0) s = s.substring(scheme + 3);
+        int slash = s.indexOf('/');
+        if (slash >= 0) s = s.substring(0, slash);
+        // 콜론이 하나뿐일 때만 포트로 본다. IPv6 주소는 콜론이 여럿이라 건드리면 깨진다.
+        int colon = s.indexOf(':');
+        if (colon >= 0 && colon == s.lastIndexOf(':')) s = s.substring(0, colon);
+        s = s.trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    /** 상태를 한 곳에서만 바꾼다. 화면은 이 두 값만 읽는다. */
+    private void setState(String s) {
+        stateText = s;
+        currentHost = host;
     }
 
     private void startForegroundCompat(String host) {
@@ -122,46 +180,13 @@ public class PlayerService extends Service {
         wakeLock = null;
     }
 
-    private void playLoop(String host) {
-        int minBuf = AudioTrack.getMinBufferSize(
-                44100, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT);
-        track = new AudioTrack.Builder()
-                .setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build())
-                .setAudioFormat(new AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(44100)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                        .build())
-                .setBufferSizeInBytes(minBuf * BUFFER_MULT)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                // 안드로이드 고속 경로(fast mixer)를 요청한다. 통과하면 출력 버퍼가
-                // 크게 줄어든다. 다만 조건이 "샘플레이트가 기기 네이티브와 일치"인데
-                // 우리는 44100 이고 기기는 대개 48000 이라 **거부될 가능성이 높다**.
-                // 거부돼도 손해는 없고, 거부당했다는 사실이 48kHz 전환의 근거가 된다.
-                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-                .build();
-        track.play();
-
-        // 요청한 값이 그대로 잡혔는지 확인한다. 캡처 쪽은 HAL 이 3초 요청을 69ms 로
-        // 잘라버린 전례가 있다 — 요청값만 믿으면 없는 여유를 있다고 착각한다.
-        AudioManager am = getSystemService(AudioManager.class);
-        String nativeRate = am != null
-                ? am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE) : "?";
-        String nativeBurst = am != null
-                ? am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER) : "?";
-        int mode = track.getPerformanceMode();
-        Log.i(TAG, "player track: 버퍼요청=" + (minBuf * BUFFER_MULT / 4 * 1000 / 44100) + "ms"
-                + " 실제=" + (track.getBufferSizeInFrames() * 1000 / 44100) + "ms"
-                + "(" + track.getBufferSizeInFrames() + "프레임)"
-                + " 고속경로=" + (mode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
-                        ? "허용됨" : "거부됨(mode=" + mode + ")")
-                + " 기기네이티브=" + nativeRate + "Hz/" + nativeBurst + "프레임"
-                + " 우리=44100Hz");
+    private void playLoop() {
+        int minBuf = 0;
 
         while (running) {
+            // 매 회차 현재 대상을 다시 읽는다. onStartCommand 가 도중에 바꿔치기하면
+            // 소켓이 끊기고 여기로 떨어져, 다음 바퀴에서 새 주소로 붙는다.
+            String host = this.host;
             try {
                 sock = new Socket();
                 sock.connect(new InetSocketAddress(host, CaptureService.PORT), 4000);
@@ -173,8 +198,28 @@ public class PlayerService extends Service {
 
                 InputStream in = sock.getInputStream();
                 skipHeaders(in);
-                skipFully(in, 44);   // WAV 헤더
+
+                // WAV 헤더를 버리지 않고 읽어서 **호스트가 실제로 보내는 샘플레이트**를
+                // 쓴다. 44100 을 박아두면 호스트만 48000 으로 올렸을 때 소리가 느려지고,
+                // 그 증상으로 원인을 찾기가 고약하다. 버전이 어긋나도 알아서 맞는다.
+                byte[] wav = new byte[44];
+                readFully(in, wav);
+                int rate = le32(wav, 24);
+                if (rate < 8000 || rate > 192000) {
+                    Log.w(TAG, "WAV 헤더의 샘플레이트가 이상하다(" + rate + ") — 48000 으로 가정");
+                    rate = 48000;
+                }
+
+                if (track == null || rate != trackRate) {
+                    if (track != null) { track.stop(); track.release(); }
+                    minBuf = AudioTrack.getMinBufferSize(rate,
+                            AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT);
+                    track = buildTrack(rate, minBuf);
+                    trackRate = rate;
+                    track.play();
+                }
                 Log.i(TAG, "player connected to " + host);
+                setState("듣는 중");
 
                 // ── 지연 계측 ──────────────────────────────
                 // 우리가 AudioTrack 에 밀어넣은 프레임 수와, 실제로 스피커까지 나간
@@ -209,8 +254,8 @@ public class PlayerService extends Service {
                                 & 0xFFFFFFFFL;
                         // 언더런이 나면 head 가 앞질러 음수가 된다 — 0 으로 눌러 읽는다.
                         long backlogFrames = Math.max(0, writtenFrames - played);
-                        long bufMs = backlogFrames * 1000 / 44100;
-                        long expected = 44100L * 4 * gapMs / 1000;
+                        long bufMs = backlogFrames * 1000 / rate;
+                        long expected = (long) rate * 4 * gapMs / 1000;
                         int netPct = expected > 0 ? (int) (recvBytes * 100 / expected) : 100;
                         int under = Build.VERSION.SDK_INT >= 24 ? track.getUnderrunCount() : -1;
 
@@ -224,7 +269,7 @@ public class PlayerService extends Service {
                         long trueMs = -1;
                         if (track.getTimestamp(ts) && ts.framePosition > 0) {
                             long pending = writtenFrames - ts.framePosition;
-                            long presentAt = ts.nanoTime + pending * 1_000_000_000L / 44100;
+                            long presentAt = ts.nanoTime + pending * 1_000_000_000L / rate;
                             trueMs = (presentAt - now) / 1_000_000L;
                         }
 
@@ -241,12 +286,72 @@ public class PlayerService extends Service {
                 }
             } catch (Exception e) {
                 Log.w(TAG, "player: " + e);
+                // 실패를 화면까지 올린다. 조용히 재시도만 하면 사용자 눈에는
+                // "듣는 중" 인데 소리만 안 나는 상태로 보인다. 그게 제일 나쁘다.
+                setState(e instanceof java.net.UnknownHostException
+                        ? "주소를 찾을 수 없음 — 재시도 중"
+                        : "연결 실패 — 재시도 중");
             }
             closeSock();
             if (!running) break;
             try { Thread.sleep(1000); } catch (InterruptedException ignored) { }
             Log.i(TAG, "player reconnecting…");
         }
+    }
+
+    /**
+     * 고속 경로(fast mixer)를 요청해서 만든다.
+     *
+     * 조건은 **샘플레이트가 기기 네이티브와 일치**하는 것이다. 44100 이던 시절엔
+     * 리샘플링이 걸려 거부됐다(mode=0 실측). 호스트를 48000 으로 올린 이유가 이거다.
+     * 허용 여부는 로그의 `고속경로=` 로 바로 판정된다 — 요청값을 믿지 않는다.
+     */
+    private AudioTrack buildTrack(int rate, int minBuf) {
+        AudioTrack t = new AudioTrack.Builder()
+                .setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build())
+                .setAudioFormat(new AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                        .build())
+                .setBufferSizeInBytes(minBuf * BUFFER_MULT)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                .build();
+
+        AudioManager am = getSystemService(AudioManager.class);
+        String nativeRate = am != null
+                ? am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE) : "?";
+        String nativeBurst = am != null
+                ? am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER) : "?";
+        int mode = t.getPerformanceMode();
+        int frames = t.getBufferSizeInFrames();
+        Log.i(TAG, "player track: 버퍼요청=" + (minBuf * BUFFER_MULT / 4 * 1000 / rate) + "ms"
+                + " 실제=" + (frames * 1000 / rate) + "ms(" + frames + "프레임)"
+                + " 고속경로=" + (mode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
+                        ? "허용됨" : "거부됨(mode=" + mode + ")")
+                + " 기기네이티브=" + nativeRate + "Hz/" + nativeBurst + "프레임"
+                + " 스트림=" + rate + "Hz");
+        return t;
+    }
+
+    /** n 바이트를 다 채울 때까지 읽는다. read() 가 한 번에 다 준다는 보장이 없다. */
+    private void readFully(InputStream in, byte[] b) throws Exception {
+        int off = 0;
+        while (off < b.length) {
+            int n = in.read(b, off, b.length - off);
+            if (n < 0) throw new Exception("eof in wav header");
+            off += n;
+        }
+    }
+
+    /** WAV 헤더는 리틀엔디안이다. */
+    private int le32(byte[] b, int off) {
+        return (b[off] & 0xFF) | (b[off + 1] & 0xFF) << 8
+                | (b[off + 2] & 0xFF) << 16 | (b[off + 3] & 0xFF) << 24;
     }
 
     /** 응답 헤더 끝(\r\n\r\n)까지 한 바이트씩 넘긴다. */
@@ -278,6 +383,8 @@ public class PlayerService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        currentHost = null;
+        stateText = "";
         closeSock();
         if (track != null) { try { track.stop(); track.release(); } catch (Exception ignored) { } }
         releaseLocks();

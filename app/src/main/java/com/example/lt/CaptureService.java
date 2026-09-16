@@ -58,7 +58,14 @@ public class CaptureService extends Service {
     public static final String EXTRA_DATA = "data";
     public static final String ACTION_STOP = "com.example.lt.STOP";
 
-    private static final int SAMPLE_RATE = 44100;
+    /**
+     * 기기 네이티브 샘플레이트에 맞춘다. 요즘 안드로이드 기기는 거의 다 48000 이다.
+     *
+     * 44100 이던 시절엔 캡처·재생 양쪽에서 AudioFlinger 가 리샘플링을 했고,
+     * 그 때문에 청취자가 **고속 경로(fast mixer)에서 탈락**했다(`mode=0` 실측).
+     * 44100 을 쓸 이유는 애초에 없었다 — CD 시절 관성이다.
+     */
+    private static final int SAMPLE_RATE = 48000;
     private static final int CHANNELS = 2;
     private static final int BITS = 16;
     private static final String CHANNEL_ID = "lt_capture";

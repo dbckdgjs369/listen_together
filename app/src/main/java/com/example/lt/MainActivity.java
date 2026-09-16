@@ -70,6 +70,8 @@ public class MainActivity extends Activity {
     };
 
     private TextView status;
+    /** 청취 상태 한 줄 — PlayerService 가 쓰는 값을 그대로 비춘다. */
+    private TextView joining;
     private LinearLayout found;
     private EditText manual;
 
@@ -130,6 +132,13 @@ public class MainActivity extends Activity {
 
         // ── 같이 듣기 ───────────────────────────────
         root.addView(title("같이 듣기", 18));
+
+        // 지금 어디에 붙어 있는지를 제일 먼저 보여준다. 이게 없으면 사용자는
+        // 자기가 이미 참여 중이라는 것도, 그래서 새 호스트를 누르려면 먼저
+        // 나가야 한다는 것도 알 수 없다. 소리가 안 날 때 볼 곳이 여기다.
+        joining = hint("");
+        root.addView(joining);
+
         root.addView(hint("친구가 공유를 시작하면 아래에 자동으로 뜹니다."));
 
         found = new LinearLayout(this);
@@ -151,6 +160,7 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) {
                 stopService(new Intent(MainActivity.this, PlayerService.class));
                 render("듣기를 종료했습니다");
+                refreshJoining();
             }
         }));
 
@@ -164,11 +174,14 @@ public class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         startDiscovery();
+        ui.removeCallbacks(joinTicker);
+        ui.post(joinTicker);
     }
 
     @Override protected void onPause() {
         super.onPause();
         discovering = false;
+        ui.removeCallbacks(joinTicker);
     }
 
     // ── UI 조각 ────────────────────────────────────
@@ -444,8 +457,33 @@ public class MainActivity extends Activity {
         Intent svc = new Intent(this, PlayerService.class);
         svc.putExtra(PlayerService.EXTRA_HOST, ip);
         startForegroundService(svc);
-        render("듣는 중 — " + ip);
+        // 여기서 "듣는 중" 이라고 단정하지 않는다. 실제로 붙었는지는 서비스만 안다.
+        refreshJoining();
     }
+
+    /**
+     * 서비스의 상태를 화면에 비춘다. 0.5초마다 돌며, 화면이 꺼져 있을 땐 멈춘다.
+     *
+     * 굳이 폴링인 이유는 PoC 라서다 — 브로드캐스트나 바인딩을 끌어오는 것보다
+     * 상태 한 줄 읽는 게 싸고, 틀릴 여지도 없다.
+     */
+    private void refreshJoining() {
+        if (joining == null) return;
+        String host = PlayerService.currentHost;
+        if (host == null) {
+            joining.setText("참여 중이 아닙니다.");
+        } else {
+            joining.setText("▶ " + host + " 에 참여 중 — " + PlayerService.stateText
+                    + "\n다른 사람을 누르면 그쪽으로 옮겨갑니다. 그만 들으려면 [나가기].");
+        }
+    }
+
+    private final Runnable joinTicker = new Runnable() {
+        @Override public void run() {
+            refreshJoining();
+            ui.postDelayed(this, 500);
+        }
+    };
 
     /** 호스트가 1초마다 뿌리는 UDP 비콘을 받아 목록을 만든다. */
     private void startDiscovery() {
