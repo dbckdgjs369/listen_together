@@ -99,13 +99,13 @@ web/listener/**       (← B의 트리. 한 파일도 열지 않는다)
 
 | # | 파일 | 무엇을 얻는가 |
 |---|---|---|
-| 1 | `/Users/yoochangheon/Desktop/listen-together/web/CONTRACT.md` | **동결 계약 전문.** 이게 판정 기준이다. §2 소유권, §4 프로토콜, §5 `protocol.ts` 전문, §6 mount 시그니처, §8 한국어 문구 사전, §9 타이밍 상수표, §10 배포. **§8.4·§8.7·§8.8이 네 문구 전량이다** |
+| 1 | `/Users/yoochangheon/Desktop/listen-together/web/CONTRACT.md` | **동결 계약 전문.** 이게 판정 기준이다. §2 소유권, §4 프로토콜, §5 `protocol.ts` 전문, §6 mount 시그니처, §8 한국어 문구 사전, §9 타이밍 상수표, §10 배포. **§8 전체를 한 번 통독한 뒤 자기 절로 내려가라. 네 문구는 §8.2(host 소유 행)·§8.3·§8.4·§8.7·§8.8이다** — §8.2를 건너뛰면 `대기 중`·`공유 중` 같은 가장 기본적인 상태 문구를 지어내게 된다 |
 | 2 | `/Users/yoochangheon/Desktop/listen-together/web/PLAN.md` | 왜 이렇게 만드는가. §1 동등성 표(21행), §2 아키텍처, 시연 대본. **네 작업이 시연에서 어떤 장면이 되는지 알고 짜라** |
 | 3 | `/Users/yoochangheon/Desktop/listen-together/README.md` | 원본 교훈 문서. 특히 **"조용한 재시도 금지"**, **cap/net/drop 판정표**, **48kHz 고속경로**, 무음 keepalive |
 | 4 | `app/src/main/java/com/example/lt/CaptureService.java` | **네 대응 원본.** 1200줄 남짓. 최소한 이 지점들은 직접 읽어라 (아래 표) |
 | 5 | `web/shared/protocol.ts` · `web/shared/strings.ts` | 실물 계약. 문서와 소스가 어긋나면 **소스가 이긴다** |
 | 6 | `web/shared/mount.ts` · `web/shared/ice.ts` · `web/shared/ws.ts` · `web/shared/log.ts` | 네가 import할 것들의 실제 시그니처 |
-| 7 | `web/tools/mock-listener/main.ts` | 네 단독 검증 장치가 어떤 프레임을 보내는지 |
+| 7 | `web/tools/mock-listener/main.ts` | 네 단독 검증 장치가 어떤 프레임을 보내는지. **stats는 지어낸 값이 아니라 `getStats(inbound-rtp)` 실측 카운터다** — 가짜 숫자였다면 아래 완료 기준의 '격리 발동'과 '상호 오프셋'을 원리적으로 검증할 수 없다. `?stall=<ms>`로 한 탭만 정체시켜 격리를 때린다. `host-stopped(gone)` 때 룸 WS를 닫지 않으므로 재점유 경로도 이걸로 검증된다 |
 
 ### `CaptureService.java`에서 반드시 볼 지점
 
@@ -258,7 +258,7 @@ export function mount(el: HTMLElement, ctx: MountContext): MountHandle
 | 핫스팟 카드 (`ui/hotspot-card.ts`) | 버튼이 아니라 **안내 카드**다(웹은 AP를 못 연다). 제목 `Wi-Fi 없을 때: 호스트 폰의 핫스팟을 직접 켜세요` / 본문 `설정 > 모바일 핫스팟을 켜고, 친구들이 그 Wi-Fi에 붙으면 됩니다.` |
 | 고정 바 (`ui/statusbar.ts`) | 청취자 수 + 상태. 원본 포그라운드 서비스 상시 알림의 대체. 제목 `같이듣기 — 내 소리 공유 중`, 2줄째 참여 링크, 버튼 `공유 중지` |
 | **Wake Lock** | `navigator.wakeLock.request('screen')`. `visibilitychange`(복귀 시)와 sentinel의 `release` 이벤트에서 **재요청**한다. 실패해도 조용히 넘어가지 말고 로그를 남긴다 |
-| **호스트 MediaSession** ✚ | `metadata = {title:'같이듣기 — 내 소리 공유 중', artist: <참여 링크>}`, `playbackState='playing'`, `setActionHandler('stop', 공유중지)`. **원본 알림 액션의 직계 대체이자, Chrome의 "가청 오디오 탭 우대"를 받는 조건이다.** 이게 없으면 Android 호스트가 백그라운드에서 죽는 시점이 훨씬 빨라진다 |
+| **호스트 MediaSession** ✚ | `metadata = {title:'같이듣기 — 내 소리 공유 중', artist: <참여 링크>}`, `playbackState='playing'`, `setActionHandler('stop', 공유중지)`. **원본 알림 액션의 직계 대체다** — 잠금화면 stop 컨트롤과 메타데이터 표시를 위해 넣는다. 다만 백그라운드 생존은 MediaSession이 아니라 **가청 오디오 유지 + Wake Lock**에 걸려 있다. Chrome 문서가 말하는 면제 트리거는 '실제로 들리는 오디오'이지 MediaSession 등록이 아니고, MediaStream 재생의 생존 기여는 미검증이다(조사 verdict: partial). 여기에 인과를 걸어두면 Sync 3에서 호스트가 죽었을 때 엉뚱한 곳을 판다 |
 
 **CSS는 전부 `web/host/host.css`에 넣는다.** "shared CSS에 셀렉터 하나만 추가하고 싶다"는 생각이 들면 그건 `host.css`로 갈 물건이다.
 
@@ -328,6 +328,9 @@ AUDIO rms=12079 peak=30613 clients=2 gap=1000ms cap=100% net=100% drop=0
    /tools/mock-listener/?code=A3F9&name=mock-2
    /tools/mock-listener/?code=A3F9&name=mock-3
    /tools/mock-listener/?code=A3F9&name=mock-4
+
+   # 느린 청취자 격리 시험: 한 탭만 stats 보고를 정체시킨다
+   /tools/mock-listener/?code=A3F9&name=mock-slow&stall=6000
    ```
    각 탭은 자동으로 join → offer 수신 → answer 회신 → 재생하고, 1초마다 가짜 `stats`를 보낸다.
 3. 5번째 탭을 열면 `room-full` 에러가 나야 한다 (정원 검증)
@@ -349,8 +352,8 @@ AUDIO rms=12079 peak=30613 clients=2 gap=1000ms cap=100% net=100% drop=0
 
 | 목적 | 명령 | 주의 |
 |---|---|---|
-| UI만 만질 때 | `npm run dev` (포트 7990) | **vite dev 서버는 정적 자산만 준다.** WS 시그널링이 필요한 순간부터는 아래로 간다. `vite.config.ts`에 `/ws` 프록시가 있는지 먼저 확인해라 |
-| 시그널링 포함 로컬 | `npm run dev:worker` (`wrangler dev --env a`) | DO까지 로컬에서 돈다. 빌드 산출물이 필요하면 `npm run build` 먼저 |
+| UI만 만질 때 | `npm run dev` (포트 7990) | **vite dev 서버는 정적 자산만 준다.** `vite.config.ts`에 `/ws`·`/_lobby` 프록시가 **Step 0에서 이미 들어가 있다**(target `http://127.0.0.1:8787`). 없어 보여도 그 파일을 고치지 말고 멈춰서 보고해라 — 동결 파일이고, 양쪽이 각자 다른 포트로 고치면 머지 충돌이 확정된다 |
+| 시그널링 포함 로컬 | `npm run dev:worker:a` | DO까지 로컬에서 돈다. **`:a`만 쓴다** — `:b`는 B의 슬롯이다. 빌드 산출물이 필요하면 `npm run build` 먼저 |
 | **실기기** | `npm run deploy:a` | **HTTPS가 필수다.** `http://192.168.x.x`는 secure context가 아니라 `navigator.mediaDevices` 자체가 `undefined`가 되고 탭 캡처·마이크가 통째로 죽는다 |
 
 **개발 중에는 로비 URL에 `?lobby=a`를 붙인다.** 안 붙이면 공인 IP 버킷이 같을 때 B의 목 데이터 방(440Hz 오실레이터)이 네 목록에 섞인다.

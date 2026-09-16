@@ -85,7 +85,7 @@ web/host/**           (← A의 트리. 한 파일도 열지 않는다. vendor/ 
 
 | # | 파일 | 무엇을 얻는가 |
 |---|---|---|
-| 1 | `/Users/yoochangheon/Desktop/listen-together/web/CONTRACT.md` | **동결 계약 전문.** 이게 판정 기준이다. §2 소유권, §4 프로토콜, §5 `protocol.ts` 전문, §6 mount 시그니처, **§7 리스너 상태 전이표 17행(← 네 사양서 그 자체다)**, §8 한국어 문구 사전, §9 타이밍 상수표, §10 배포. **§8.5·§8.6·§8.7이 네 문구 전량이다** |
+| 1 | `/Users/yoochangheon/Desktop/listen-together/web/CONTRACT.md` | **동결 계약 전문.** 이게 판정 기준이다. §2 소유권, §4 프로토콜, §5 `protocol.ts` 전문, §6 mount 시그니처, **§7 리스너 상태 전이표 17행(← 네 사양서 그 자체다)**, §8 한국어 문구 사전, §9 타이밍 상수표, §10 배포. **§8 전체를 한 번 통독한 뒤 자기 절로 내려가라. 네 문구는 §8.2(listener 소유 행)·§8.5·§8.6·§8.7이다** — §8.2에 `듣기를 종료했습니다`와 `자동 발견 실패 — 아래에 코드를 직접 입력하세요`가 들어 있다 |
 | 2 | `/Users/yoochangheon/Desktop/listen-together/web/PLAN.md` | 왜 이렇게 만드는가. §1 동등성 표(21행), §2 아키텍처, 시연 대본. **시연 Act 3·4·5·7·9가 전부 네 화면이다 — 알고 짜라** |
 | 3 | `/Users/yoochangheon/Desktop/listen-together/README.md` | 원본 교훈 문서. 특히 **"조용한 재시도 금지"**(= 네 모듈의 존재 이유), 지연 내역 표, 48kHz |
 | 4 | `app/src/main/java/com/example/lt/PlayerService.java` | **네 1번 대응 원본.** 최소한 아래 표의 지점들은 직접 읽어라 |
@@ -144,8 +144,8 @@ export function mount(el: HTMLElement, ctx: MountContext): MountHandle
 
 | 소켓 | 경로 | 수명 | 규칙 |
 |---|---|---|---|
-| **로비 WS** | `ctx.wsUrl(LOBBY_PATH)` | **페이지가 열려 있는 내내** | 첫 프레임은 반드시 `{t:'lobby-hello', v:PROTOCOL_V, selfRoomId}`. **join·갈아타기·나가기 어느 경우에도 절대 닫지 않는다.** UDP 비콘 수신 스레드의 직계 대체 |
-| **룸 WS** | `ctx.wsUrl(roomWsPath(code))` | 참여 중에만 | 첫 프레임은 반드시 `{t:'join', v:PROTOCOL_V, deviceName}` |
+| **로비 WS** | `ctx.wsUrl(LOBBY_PATH)` | **페이지가 열려 있는 내내** | 첫 프레임은 반드시 `{t:'lobby-hello', v:PROTOCOL_V, selfRoomId}`. **`selfRoomId`는 `ctx.selfRoom.get()`에서 얻는다**(§6) — A의 `localStorage['lt.host.*']`를 읽지 마라, 네임스페이스 위반이고 A가 키를 바꾸면 조용히 깨진다. 호스트가 로비 소켓보다 늦게 방을 열 수 있으니 `ctx.selfRoom.subscribe()`로 나중 값도 받아라. **join·갈아타기·나가기 어느 경우에도 절대 닫지 않는다.** UDP 비콘 수신 스레드의 직계 대체 |
+| **룸 WS** | `ctx.wsUrl(roomWsPath(code))` | 참여 중에만 | 첫 프레임은 반드시 `{t:'join', v:PROTOCOL_V, deviceName}`. **`deviceName`은 `ctx.deviceName.get()`에서 얻는다**(§6, 키는 `lt.shared.deviceName`) — 이름 입력 UI는 A 단독 소유이고 **너는 읽기만 한다.** 이름 입력 칸을 새로 만들지 마라(§8에 없는 한국어 라벨을 지어내게 된다). 빈 문자열을 보내도 안 된다 — 이 값이 그대로 A의 배너 `<이름> 연결 불량으로 끊었습니다`에 박힌다 |
 
 - **갈아타기** = `{t:'leave', reason:'switch'}` 송신 → 옛 룸 WS `close(CLOSE.SWITCH /* 4000 */)` → 새 코드로 새 룸 WS open. **로비 WS는 건드리지 않는다.** 이 규칙 덕에 갈아타는 중에도 발견 목록이 끊기지 않는다
 - **나가기** = `{t:'leave', reason:'leave'}` → 룸 WS만 `close(CLOSE.LEAVE /* 4001 */)`. 로비 WS 유지
@@ -325,7 +325,8 @@ optional — **합의 없이 추가할 수 있는 영역이다. 적극적으로 
 
 ### 절차
 
-1. 탭 1: `/tools/mock-host/` → [공유 시작] → 방 코드 확인 (예: `A3F9`)
+1. 탭 1: `/tools/mock-host/?name=mh1` → [공유 시작] → 방 코드 확인 (예: `A3F9`)
+   - **`?name=`을 반드시 준다.** hostToken이 `lt.shared.mock-host.<name>`으로 분리 저장되기 때문이다. 안 주면 두 번째 탭이 같은 토큰으로 같은 방을 잡아 첫 탭을 밀어내고(`close(4003 REPLACED)`), 아래 '갈아타기'와 '강제 종료' 시험이 서로를 배제한다
 2. 탭 2: 네 리스너로 그 코드에 붙는다 (목록 탭 / 수동 입력 / `#A3F9` 딥링크 세 경로 전부)
 3. mock-host의 버튼 3개로 종료 경로를 때린다
 
@@ -337,8 +338,8 @@ optional — **합의 없이 추가할 수 있는 영역이다. 적극적으로 
 | **`듣는 중` 전이** | `ontrack` 직후가 아니라 `packetsReceived` 증가 뒤에 바뀌는가 (콘솔로 타이밍 확인) |
 | 자동 발견 | mock-host가 [공유 시작]을 누른 뒤 **몇 초 만에** 목록에 뜨는가 (`HEARTBEAT_MS` 1초 / `HOST_TTL_MS` 3초 기준 1~3초) |
 | 정상 종료 | **[공유 중지]** → `host-stopped(stop)` → `스트림 끊김 — 재접속` → 재시도가 `room-not-found`로 전이하는가 |
-| **강제 종료** | **[강제 종료]**(stop 없이 소켓만 끊음) → `host-stopped(gone)` → **룸 WS를 닫지 않고** 대기하는가. 60초 안에 mock-host가 [공유 시작]을 다시 누르면 **자동 복귀**하는가 |
-| 갈아타기 | mock-host 탭을 2개 띄워 방 두 개를 만들고, 나가기 없이 목록에서 전환. `연결 중…`을 반드시 거치는가. 같은 방을 다시 탭하면 **no-op**인가 |
+| **강제 종료** | **[강제 종료]**(stop 없이 소켓만 끊음) → `host-stopped(gone)` → **룸 WS를 닫지 않고** 대기하는가. 60초 안에 **같은 `?name=`으로** mock-host를 새로고침·재시작하면(같은 토큰 → 같은 코드 재점유) **자동 복귀**하는가 |
+| 갈아타기 | mock-host를 `?name=mh1`·`?name=mh2`로 2탭 띄워 **방 두 개**를 만들고, 나가기 없이 목록에서 전환. `연결 중…`을 반드시 거치는가. 같은 방을 다시 탭하면 **no-op**인가 |
 | 나가기 | `듣기를 종료했습니다` + `참여 중이 아닙니다.` 복귀 |
 | 감시견 | mock-host 탭을 백그라운드로 보내 패킷을 정체시킨 뒤 `버퍼링…` → `멈춤 감지 — 재접속` 전이 |
 | `room-not-found` | 존재하지 않는 코드(`ZZZZ`) 입력 → `주소를 찾을 수 없음 — 재시도 중`. **`연결 실패`가 아니어야 한다** |
@@ -351,8 +352,8 @@ optional — **합의 없이 추가할 수 있는 영역이다. 적극적으로 
 
 | 목적 | 명령 | 주의 |
 |---|---|---|
-| UI만 만질 때 | `npm run dev` (포트 7990) | **vite dev 서버는 정적 자산만 준다.** WS 시그널링이 필요한 순간부터는 아래로 간다. `vite.config.ts`에 `/ws` 프록시가 있는지 먼저 확인해라 |
-| 시그널링 포함 로컬 | `npm run dev:worker` (`wrangler dev --env b`가 아니라 스크립트 기본값을 확인하고, 필요하면 `wrangler dev --env b`로 직접) | DO까지 로컬에서 돈다 |
+| UI만 만질 때 | `npm run dev` (포트 7990) | **vite dev 서버는 정적 자산만 준다.** `vite.config.ts`에 `/ws`·`/_lobby` 프록시가 **Step 0에서 이미 들어가 있다**(target `http://127.0.0.1:8787`). 없어 보여도 그 파일을 고치지 말고 멈춰서 보고해라 — 동결 파일이고, 양쪽이 각자 다른 포트로 고치면 머지 충돌이 확정된다 |
+| 시그널링 포함 로컬 | `npm run dev:worker:b` | DO까지 로컬에서 돈다. **`:b`만 쓴다** — `:a`는 A의 슬롯이다. 스크립트는 Step 0에서 `:a`/`:b` 쌍으로 동결돼 있으니 package.json에 줄을 추가하지 마라 |
 | **실기기(iOS 필수)** | `npm run deploy:b` | **HTTPS가 필수다.** `http://192.168.x.x`는 secure context가 아니라 `navigator.mediaDevices`·Wake Lock이 통째로 죽는다. **iOS 동작은 반드시 실기기 Safari에서 확인한다 — 데스크탑 시뮬레이션으로는 아무것도 증명되지 않는다** |
 
 **개발 중에는 로비 URL에 `?lobby=b`를 붙인다.** 안 붙이면 공인 IP 버킷이 같을 때 A의 방이 네 목록에 섞인다.
@@ -380,7 +381,7 @@ optional — **합의 없이 추가할 수 있는 영역이다. 적극적으로 
 | # | 함정 | 증상 | 대응 |
 |---|---|---|---|
 | 1 | **제스처 핸들러에서 `await` 뒤로 `play()`를 미룬다** | iOS에서 `NotAllowedError`. 데스크탑에서는 멀쩡해서 발견이 늦다 | **핸들러 안에서 `play()`·`resume()`·`wakeLock.request()`를 동기로 전부 시작**하고 결과만 `.then/.catch`로 |
-| 2 | **`jitterBufferTarget`을 기능 감지 없이 대입** | iOS Safari 27 미만에서 예외 → 재생 자체가 안 붙는다 | `'jitterBufferTarget' in receiver` 검사. 폴백 `playoutDelayHint`는 **초 단위**(단위 혼동 시 지연 1000배) |
+| 2 | **`jitterBufferTarget`을 기능 감지 없이 대입** | 미지원 브라우저에서 **조용히 무시된다**(예외가 안 나서 더 찾기 어렵다) — 지연 튜닝이 안 먹는데 코드는 멀쩡해 보인다. 범위 밖(0~4000ms) 값만 `RangeError`를 던진다. **iOS에서 재생이 아예 안 붙으면 원인은 이게 아니라 제스처 컨텍스트 상실·`playsinline` 누락·자동재생 거부 쪽이다** | `'jitterBufferTarget' in receiver` 검사. 폴백 `playoutDelayHint`는 **초 단위**(단위 혼동 시 지연 1000배) |
 | 3 | **`ontrack`만으로 `듣는 중` 전이** | **원본이 3분 내내 거짓말했던 그 버그의 완벽한 재현** | `packetsReceived` 증가 확인 후에만 |
 | 4 | **`visibilitychange`에서 Wake Lock을 재요청 안 한다** | 탭 복귀 후 화면이 꺼지고 소리가 끊긴다 | 복귀 시 + sentinel `release` 이벤트 둘 다에서 재요청. 실패하면 전체화면 배너 |
 | 5 | **`addIceCandidate`를 `setRemoteDescription` 전에 호출** | **가끔** 연결이 안 된다. 재현이 안 돼서 원인 찾기 최악 | remote description 잡히기 전 후보는 큐잉 후 flush |
@@ -429,7 +430,7 @@ optional — **합의 없이 추가할 수 있는 영역이다. 적극적으로 
 
 - [ ] 제스처 1회로 `play()`+`resume()`+`wakeLock`이 전부 시작된다 (코드를 눈으로 검증)
 - [ ] `play()` 실패 시 `재생 실패: <에러이름>`이 화면에 그대로 나온다
-- [ ] `ctx.sampleRate === 48000` 확인
+- [ ] `ctx.sampleRate`를 metrics에 기록 (48000이 아니어도 배너를 띄우지 않는다 — 네 AudioContext는 `outputLatency` 계측 전용이고 재생 경로(`<audio srcObject>`)를 거치지 않는다. 리샘플러 제거가 걸린 건 호스트측이다)
 - [ ] `jitterBufferTarget`이 기능 감지 후 설정되고, 미지원 기기에서 예외가 안 난다
 - [ ] 감시견이 `버퍼링…`(1~4초) → `멈춤 감지 — 재접속`(4초+)로 전이한다
 - [ ] `visibilitychange` 복귀 시 Wake Lock 재요청 + 실패 시 전체화면 배너

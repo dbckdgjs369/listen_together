@@ -177,13 +177,13 @@ web/host/vendor/**    (A 트리 안이지만 업스트림 원본 — 편집 금�
 
 9. **딥링크 다크 뷰** — shared는 빈 컨테이너 `<div id="lt-deeplink">`와 해시 라우팅(표시/숨김, `mode='deeplink'`로 listener mount 호출)만 제공한다. **배경색을 포함한 내부 DOM·스타일 전부가 B 소유다.** deeplink 모드에서 host mount는 아예 호출되지 않는다.
 
-10. **네임스페이스** — DOM id/class 접두사는 A=`h-`, B=`l-`, shared=`lt-`. localStorage 키는 A=`lt.host.*`, B=`lt.listener.*`, shared=`lt.shared.*`. 같은 id 충돌과 CSS 누수를 구조적으로 막는다.
+10. **네임스페이스** — DOM id/class 접두사는 A=`h-`, B=`l-`, shared=`lt-`. localStorage 키는 A=`lt.host.*`, B=`lt.listener.*`, shared=`lt.shared.*`. 같은 id 충돌과 CSS 누수를 구조적으로 막는다. **상대 네임스페이스의 키를 읽지 않는다** — 읽어야 할 것 같으면 그건 `MountContext`에 있어야 할 값이다. 현재 공유 키는 둘뿐이다: `lt.shared.deviceName`(A만 쓰고 B는 읽기만, §6 `ctx.deviceName` 경유), `lt.shared.mock-host.<name>`(mock 전용).
 
 11. **실험 DOM 타입** — `jitterBufferTarget`, `suppressLocalAudioPlayback`, `contentHint`, `outputLatency`, WakeLock 등 lib.dom 편차가 있는 API는 `web/shared/experimental-dom.d.ts` **한 곳에만** 선언한다. 컴파일 에러가 나도 루트에 `global.d.ts`를 새로 만들거나 tsconfig의 lib/target을 고치지 않는다 — **그게 정확히 같은 파일 머지 충돌을 만드는 경로다.** TypeScript는 정확 버전으로 핀되어 있어 한쪽에서만 lib.dom이 바뀌는 일이 없다.
 
 12. **서버** — `server/**`는 Step 0 이후 손대지 않는다. A는 `tools/mock-listener` 4탭으로, B는 `tools/mock-host`로 각자 단독 검증한다. **상대 진척을 기다리다 서버를 고치는 상황 자체를 만들지 않는다.**
 
-13. **mock 도구** — '상대 모듈의 최소 대역품'이다. **기능을 늘리지 않는다** — 더 필요해졌다면 그건 본 모듈이 할 일이다. 두 mock 모두 '정상 종료'와 '강제 종료'(leave/stop 없이 소켓만 끊어 서버의 timeout/gone 경로를 때린다) 버튼을 갖는다.
+13. **mock 도구** — '상대 모듈의 최소 대역품'이다. **기능을 늘리지 않는다** — 더 필요해졌다면 그건 본 모듈이 할 일이다. 두 mock 모두 '정상 종료'와 '강제 종료'(leave/stop 없이 소켓만 끊어 서버의 timeout/gone 경로를 때린다) 버튼을 갖는다. 예외는 `mock-listener`의 `?stall=<ms>` 하나뿐이다 — A의 '느린 청취자만 격리' 완료 기준은 실제로 stats를 정체시키지 않으면 발동 여부를 볼 수 없다. **mock-listener의 stats는 지어낸 값이 아니라 실측 카운터다**(§6 주석 참조). 가짜 숫자는 숫자를 그릴 뿐 격리가 실제로 도는지를 증명하지 못한다.
 
 14. **배포 슬롯** — 배포 타깃에도 소유권이 있다. A는 `--env a`에만, B는 `--env b`에만. canonical은 Sync 시점에 main 브랜치에서 한 사람만. [§10](#10-배포-전략) 참조.
 
@@ -304,7 +304,7 @@ RoomDO → LobbyDO 단방향 fetch 2종만 존재한다. 역방향(LobbyDO → R
   | 있음 | 불일치/없음 | `error(room-taken)`+`close(4002)` |
 
 - **호스트 소켓 중복** — 이미 활성 호스트 소켓이 있는데 토큰이 **일치하는** `host-open`이 오면 옛 소켓을 `close(4003 REPLACED)`하고 교체한다. 새로고침 시 옛 소켓의 close 이벤트가 늦게 도착하는 경합을 이걸로 흡수한다. 토큰 불일치면 새 소켓을 거절하고 기존 호스트는 건드리지 않는다.
-- `host-announce` 수신 시 listeners 수를 **서버가 직접 세어** LobbyDO로 중계한다. 중계는 최대 `HEARTBEAT_MS`에 1회로 스로틀.
+- `host-announce` 수신 시 listeners 수를 **서버가 직접 세어** LobbyDO로 중계한다. 중계는 최대 `HEARTBEAT_MS`에 1회로 스로틀. `sourceReady`가 실려 오면 방 상태에 보관하고 `InternalAnnounce`에 **그대로 실어 보낸다** — 서버는 이 값을 해석하지 않는다.
 - **정원** — 리스너가 `MAX_LISTENERS`(4)를 넘으면 `error(room-full)`+`close(4002)`. 호스트 소켓은 정원에 포함되지 않는다.
 - `peerId`는 서버가 발급한다(`p2`,`p3`,… 단조 증가). **재점유 시에도 살아남은 리스너의 peerId는 바뀌지 않는다** — 호스트가 PC 맵을 peerId로 관리하기 때문.
 - **릴레이** — offer는 `to`를 벗기고 `from:'host'`로. answer/ice는 `from:peerId`로 호스트에게만. `to`가 없는 peer면 발신자에게 `peer-not-found`를 돌려주고 소켓은 유지. `candidate:null`도 삼키지 않는다.
@@ -690,6 +690,19 @@ export interface HostEntry {
   since: number;
   /** 하트비트가 끊겨 회색 처리 중인지. host-offline을 받으면 true. */
   stale?: boolean;
+  /**
+   * 호스트가 실제로 소리를 실을 준비가 됐는지(소스 선택·재생 중).
+   * false면 리스너 목록에 회색 접미 " (소리 준비 중)"를 붙인다 — §8.5.
+   *
+   * 이 필드가 v1에 있는 이유: 호스트가 새로고침하면 방은 hostToken으로 부활하지만
+   * 파일 blob URL은 소멸한다. 방은 살아 있는데 소리가 없는 상태가 되고, 그건
+   * README가 최악이라고 못 박은 "화면은 듣는 중인데 실제로는 아무것도 안 나옴"과
+   * 같은 종류다. 리스너가 붙기 전에 알 수 있어야 한다.
+   *
+   * optional인 이유: 생산자가 서버(RoomDO→LobbyDO)라 나중에 추가하면 protocol.ts와
+   * server/를 동시에 고쳐야 한다(= 동결 파기). 지금 넣어두고 값만 채운다.
+   */
+  sourceReady?: boolean;
 }
 
 export const ERROR_CODES = [
@@ -784,12 +797,14 @@ export interface HostOnlineMsg {
   host: HostEntry;
 }
 
-/** [S→C] 이미 있는 방의 listeners/deviceName만 바뀌었다. 순서는 건드리지 않고 라벨만 갱신. */
+/** [S→C] 이미 있는 방의 listeners/deviceName/sourceReady만 바뀌었다. 순서는 건드리지 않고 라벨만 갱신. */
 export interface HostUpdateMsg {
   t: 'host-update';
   roomId: RoomId;
   listeners: number;
   deviceName?: string;
+  /** 값이 **실제로 바뀌었을 때만** 싣는다. 매 하트비트마다 보내면 1초짜리 무의미한 브로드캐스트가 된다. */
+  sourceReady?: boolean;
 }
 
 /**
@@ -848,6 +863,12 @@ export interface HostAnnounceMsg {
   t: 'host-announce';
   /** 이름을 바꿨을 때만. 보내지 않으면 host-open 때 값을 유지한다. */
   deviceName?: string;
+  /**
+   * 지금 소리를 실을 수 있는 상태인가(소스가 선택됐고 재생 중인가).
+   * RoomDO가 방 상태에 보관하고 InternalAnnounce로 그대로 중계한다.
+   * 매 하트비트에 실어도 되고, LobbyDO가 변화분만 host-update로 내보낸다.
+   */
+  sourceReady?: boolean;
 }
 
 /** [호스트→S] 명시적 "공유 중지". 유예 없이 방을 즉시 닫는다. */
@@ -1053,6 +1074,8 @@ export interface InternalAnnounce {
   roomId: RoomId;
   deviceName: string;
   listeners: number;
+  /** RoomDO가 보관 중인 최신 값. LobbyDO는 이 값이 바뀌었을 때만 host-update에 싣는다. */
+  sourceReady?: boolean;
   ts: number;
 }
 export interface InternalOffline {
@@ -1258,15 +1281,17 @@ export function reasonFromCloseCode(code: number): PeerLeftReason {
  * ══════════════════════════════════════════════════════════════════════ */
 ```
 
-### 5.1 동결 직전 확정된 보강 3건
+### 5.1 동결 직전 확정된 보강
 
-위 소스에 더해, **같은 Step 0 커밋에서** 다음 세 가지가 들어간다. 동결 후 추가가 아니라 동결 내용의 일부다.
+위 소스에 더해, **같은 Step 0 커밋에서** 다음이 들어간다. 동결 후 추가가 아니라 동결 내용의 일부다.
 
 | 보강 | 내용 | 왜 |
 |---|---|---|
 | `SAMPLE_RATE = 48000` | `protocol.ts` 상수에 추가. A·B 양쪽이 `new AudioContext({sampleRate:48000, latencyHint:'interactive'})`로 열고 `ctx.sampleRate`로 **실제 잡힌 값을 재확인**한다. 불일치면 경고 배너 | README의 단일 최대 지연 개선(그 아래 구간 57ms→11ms)이 정확히 이것이었다. 기본 생성자로 열면 기기에 따라 44100이 잡히고, Opus가 내부 48k 고정이라 양쪽에 리샘플러가 끼어 그 46ms가 그대로 돌아온다 |
 | `lobbyKey` 도출 규칙 | `server/lobby-key.ts` + protocol.ts 주석에 '전역 로비 없음'을 명문화. `?lobby=` 오버라이드 포함 | [§4.1](#41-왜-채널이-둘로-쪼개지는가) 로비 스코프 참조 |
 | `strings.ts` 분리 | `LISTENER_STATE`·`joiningText` 등 protocol.ts에 이미 있는 것은 그대로 두고, **STATUS 15종 / PLAYER_VIEW 8종 / 배너 8종**을 `web/shared/strings.ts`로 분리해 동결 | 문구가 두 파일에 흩어지는 건 나쁘지만, 문구가 **아예 없어서 두 사람이 각자 지어내는 것**이 훨씬 나쁘다. 전량은 [§8](#8-한국어-문구-사전) |
+| `sourceReady` 4곳 | `HostEntry` / `HostUpdateMsg` / `HostAnnounceMsg` / `InternalAnnounce`에 `sourceReady?: boolean` | 산문에만 있고 타입에는 없었다. 생산자가 서버라 나중에 붙이려면 `protocol.ts`와 `server/`를 동시에 고쳐야 한다 — **동결 파기가 확정되는 종류의 누락**이다. 하필 '방은 부활했는데 소리가 없음'의 유일한 방어 장치다 |
+| `listenerCountText(n)` | `strings.ts`에 추가 — 고정 바 2줄째 `듣는 사람 <N>명 · <참여 링크>` | 시연 대본이 이 화면을 직접 비추는데 숫자를 감쌀 문구가 사전에 없었다. 없으면 A가 지어낸다 |
 
 ---
 
@@ -1293,13 +1318,62 @@ export interface MountContext {
    * 원본 MainActivity.render()는 TextView 하나를 독점했지만, 웹은 A와 B가 같은 줄을 공유한다.
    * owner를 안 받으면 B의 '듣기를 종료했습니다'가 A의 '공유 중'을 지우는,
    * 원본에는 존재하지 않던 버그가 확정적으로 난다.
-   * 렌더는 '호스트 문구 우선, 없으면 리스너 문구'로 합성해 단일 라인 외관을 유지한다.
+   *
+   * ★렌더 규칙: **두 슬롯을 항상 같이 보여준다.** 채워진 것만 ' · '로 이어 붙인다
+   * (예: '공유 중 · 듣기를 종료했습니다'). 둘 다 비면 shell이 shared 기본값 '대기 중'을 그린다.
+   *
+   * 한쪽 우선이면 안 되는 이유: panel 모드에서는 청취 전용 기기에서도 host mount가 돌아
+   * 호스트 슬롯이 '대기 중'으로 항상 차 있다. '호스트 우선'이면 B의 문구가 단 한 번도
+   * 화면에 못 나오고, 로비 WS가 죽어 자동 발견이 통째로 실패해도 화면엔 '대기 중'만 남는다.
+   * 이 프로젝트가 README에 못 박은 '조용한 실패 금지'를 계약이 직접 어기는 셈이 된다.
    * null을 주면 그 슬롯을 비운다.
    */
   setStatus(owner: StatusOwner, text: string | null): void;
 
   /** status 2줄째. 호스트 전용. null이면 '내 방: 아직 없음 (공유를 시작하면 코드가 생깁니다)' */
   setRoomLine(room: { code: string; joinUrl: string } | null): void;
+
+  /**
+   * 내 방 코드 읽기. **setRoomLine()이 쓴 값을 shell이 그대로 중계한다** — 호스트는 이미
+   * setRoomLine을 부르므로 A쪽 추가 작업은 없다.
+   *
+   * B가 쓴다: 로비 첫 프레임 lobby-hello의 selfRoomId를 채우고, 발견 목록에서 자기 방을
+   * 걸러낸다(원본 MainActivity.isMine()의 IP 대조 필터 대체). 시연에서 한 대가 호스트와
+   * 리스너를 겸하는 순간(지연 실측, 노트북 단독 경로) 자기 방이 목록에 뜨는 걸 막는 유일한 수단이다.
+   *
+   * 이게 없으면 B는 A 네임스페이스인 localStorage['lt.host.*']를 훔쳐보거나
+   * shared를 고치는 수밖에 없다 — 둘 다 규칙 위반이다. 서버 힌트로도 못 푼다.
+   * 그 힌트를 채워 보내는 주체가 바로 B이기 때문이다.
+   *
+   * 호스트가 로비 소켓보다 늦게 방을 열 수 있으므로 subscribe로 나중 값도 받는다.
+   * 최종 필터 책임은 여전히 클라이언트(B)에 있다.
+   */
+  readonly selfRoom: {
+    get(): string | null;
+    /** 반환값은 구독 해제 함수. onTeardown에 걸어두면 된다. */
+    subscribe(fn: (roomId: string | null) => void): () => void;
+  };
+
+  /**
+   * 이 기기의 이름. 원본 Build.MODEL 자리이며 A의 host-open·host-announce와
+   * B의 join에 **같은 값**이 실려야 한다.
+   *
+   * shared로 올린 이유: join의 deviceName은 필수 필드이고, 그 값이 서버를 거쳐
+   * peer-joined로 A에게 가서 A의 배너 '<이름> 연결 불량으로 끊었습니다'에 그대로 노출된다.
+   * 그런데 이름 입력 UI는 §8.4에서 호스트 섹션 전용으로만 정의돼 있어서, 이게 없으면
+   * B는 라벨을 새로 지어내거나(§8 위반) A의 키를 읽거나(네임스페이스 위반) 빈 문자열을
+   * 보내야 한다(배너가 '  연결 불량으로…'가 된다).
+   *
+   * 저장 키는 localStorage['lt.shared.deviceName'] — A·B 공용이다.
+   * 입력 UI는 §8.4 그대로 A가 단독 소유하고, B는 읽기만 한다.
+   * 값이 없으면 shell이 추정명을 만든다(UA-CH model → 'iPhone' / 'Android 폰' / '노트북').
+   */
+  readonly deviceName: {
+    get(): string;
+    /** A(입력 UI 소유자)만 호출한다. B는 절대 호출하지 않는다. */
+    set(name: string): void;
+    subscribe(fn: (name: string) => void): () => void;
+  };
 
   /** status 아래 경고 배너 슬롯. owner별 1개씩. null이면 제거. 내용은 각 소유자가 렌더한다 */
   setBanner(owner: StatusOwner, text: string | null): void;
@@ -1407,13 +1481,51 @@ declare global {
 // 440Hz 오실레이터 → MediaStreamDestination → peer-joined마다 fan-out. 프로토콜 100% 준수.
 // 버튼 3개: [공유 시작] / [공유 중지]=stop 전송(host-stopped reason:'stop')
 //          / [강제 종료]=stop 없이 WS 즉시 close(host-stopped reason:'gone' + 60초 유예 경로 검증)
-export function boot(opts: { name: string }): void;
+//
+// ★hostToken 저장 키를 name별로 분리한다: localStorage['lt.shared.mock-host.<name>']
+//   안 그러면 B의 필수 시험 두 개가 서로를 배제한다 — 재점유 시험(같은 토큰으로 같은 방
+//   되찾기)이 되려면 토큰을 보관해야 하는데, 키가 공용이면 두 번째 탭이 같은 토큰으로 같은 방을
+//   잡아 첫 탭을 close(4003 REPLACED)로 밀어내서 '방 두 개 만들어 갈아타기'가 성립하지 않는다.
+// 사용법: ?name=mh1 / ?name=mh2 로 두 방을 만들어 갈아타기를 시험하고,
+//        재점유는 같은 ?name= 으로 새로고침·재시작해서 시험한다.
+//        code를 주면 그 코드를 점유하려 시도한다(미지정이면 서버가 발급).
+export function boot(opts: { name: string; code?: string }): void;
 
 // web/tools/mock-listener/main.ts — FROZEN [S0]  (A의 디커플링 장치)
-// 자동 join → offer 수신 → answer 회신 → srcObject 재생 + 1초 주기 가짜 stats 송신.
+// 자동 join → offer 수신 → answer 회신 → srcObject 재생.
+//
+// ★stats는 지어내지 않는다. getStats(inbound-rtp)의 원시 카운터 5종을 STATS_MS 주기로 실제
+//   측정해 보낸다. 이건 기능 추가가 아니라 정확도 규정이다 — 가짜 숫자로는 A의 완료 기준 두 개가
+//   원리적으로 검증 불가다. drop은 A의 packetsSent 증분과 리스너 packetsReceived 증분의 차이이고,
+//   상호 오프셋은 jitterBufferDelay/EmittedCount + outputLatency에서 나온다. 값이 실측이 아니면
+//   숫자가 그려지기만 할 뿐 '격리가 실제로 발동하는가'를 증명하지 못한다.
+//
+// ★host-stopped(reason:'gone') 수신 시 룸 WS를 닫지 않는다. PC만 정리하고 대기하다가
+//   재offer를 수락한다(§7 전이 10과 동일). 이게 없으면 A는 재점유 경로를 혼자 검증할 수 없다.
+//
 // 버튼 2개: [나가기]=leave 후 정상 종료 / [강제 종료]=leave 없이 WS·PC 즉시 close(탭 크래시 시뮬레이션)
 // 사용법: ?code=A3F9&name=mock-1 로 4탭을 띄우면 4인 mesh·munging·대시보드를 A 혼자 검증할 수 있다.
-export function boot(opts: { code: string; name: string }): void;
+//        ?stall=<ms> 는 stats 보고를 의도적으로 정체시킨다 — '느린 청취자만 격리' 발동 시험용이며,
+//        §3-13('mock에 기능을 늘리지 않는다')의 유일한 명시적 예외다.
+export function boot(opts: { code: string; name: string; stallMs?: number }): void;
+```
+
+```ts
+// web/shared/ice.ts — FROZEN [S0]
+// ★TURN 금지. TURN을 한 줄 넣는 순간 미디어가 인터넷으로 새고 '참여자 데이터 소모 0'이 깨진다.
+//   STUN 1개만 둔다(멀티캐스트 차단망에서 srflx 폴백용).
+export const RTC_CONFIG: RTCConfiguration;
+
+// web/shared/ws.ts — FROZEN [S0]
+// 타입드 WS 래퍼. WS_PING_MS(25초) 주기 ping을 자동으로 보낸다(Hibernation autoResponse 대상).
+export interface WsHandlers<M> {
+  onMessage(msg: M): void;
+  onOpen?(): void;
+  /** code는 close code. 재시도 판단은 호출자 몫이다 — 래퍼는 재시도하지 않는다. */
+  onClose?(code: number): void;
+}
+export interface WsHandle<S> { send(msg: S): void; close(code?: number): void }
+export function openWs<S, M>(url: string, h: WsHandlers<M>): WsHandle<S>;
 ```
 
 ---
@@ -1473,9 +1585,11 @@ export function boot(opts: { code: string; name: string }): void;
 
 원본은 `MainActivity.render()` 하나가 status TextView를 독점하고 호스트 이벤트 12종·참여자 이벤트 2종·비콘 실패 1종이 전부 그리로 모였다. 웹은 A와 B가 같은 줄을 공유하므로 `setStatus(owner, text)`로 슬롯을 나눈다([§6](#6-모듈-진입점-고정-시그니처)).
 
+**두 슬롯은 항상 같이 그려진다** — 채워진 것만 ` · `로 이어 붙인다(예: `공유 중 · 듣기를 종료했습니다`). 어느 한쪽을 우선하면 안 되는 이유는 §6 `setStatus` 주석에 있다.
+
 | # | 원본 문구 | 웹 | 소유 | 언제 |
 |---|---|---|---|---|
-| 1 | `대기 중` | 유지 | host | 초기값 |
+| 1 | `대기 중` | 유지 | **shared** | **양 슬롯이 모두 빈 동안 shell이 그리는 기본값.** A의 초기값이 아니다 — A가 이걸 자기 슬롯에 넣어두면 호스트 슬롯이 페이지 수명 내내 차 있게 되고, 그 순간 B의 문구가 영영 안 보인다 |
 | 2 | `공유 중` | 유지 | host | 방 개설 + 소스 준비 완료. **소스가 없으면 이 문구를 쓰지 않는다**(→ 8.7 배너) |
 | 3 | `공유를 중지했습니다` | 유지 | host | `stop-share` 후 |
 | 4 | `권한이 거부되었습니다` | 유지 | host | `getUserMedia` NotAllowedError |
@@ -1520,9 +1634,9 @@ export function boot(opts: { code: string; name: string }): void;
 | 버튼 `핫스팟 켜기 (Wi-Fi 없을 때)` / `핫스팟 끄기` | → 웹: 버튼 삭제, 안내 카드 제목으로 전환<br>`Wi-Fi 없을 때: 호스트 폰의 핫스팟을 직접 켜세요`<br>`설정 > 모바일 핫스팟을 켜고, 친구들이 그 Wi-Fi에 붙으면 됩니다.` |
 | QR 힌트<br>`친구 카메라로 이 QR 을 찍으면 접속됩니다.`<br>`안 되면 직접: <SSID> / <비밀번호>` | → 웹:<br>`친구 카메라로 이 QR 을 찍으면 접속됩니다.`<br>`안 되면 직접: <코드>`<br>(`QR 을` 사이 공백까지 원문 유지) |
 | QR 생성 실패 `QR 생성 실패 — 직접 입력: <SSID> / <비밀번호>` | → 웹: `QR 생성 실패 — 직접 입력: <코드>` |
-| (원본 없음 — `Build.MODEL` 자동) | **신규**: 이름 입력 1칸.<br>label `이 기기 이름 (친구 목록에 보입니다)`<br>기본값 = UA-CH model 시도 → 실패 시 플랫폼 추정명(`iPhone`/`Android 폰`/`노트북`). localStorage 영구 저장.<br>**웹에는 `Build.MODEL` 등가물이 없다** — iOS Safari·데스크탑은 모델명을 절대 주지 않아서, 그대로 두면 `  님의 소리`가 되고 호스트 2명 구분이 불가능해져 갈아타기 데모가 성립하지 않는다 |
-| 호스트 알림 제목 `같이듣기 — 내 소리 공유 중` | → 웹: 고정 바 제목 + **호스트 MediaSession `title`** (잠금화면에서 보인다) |
-| 호스트 알림 본문 `http://<IP>:7980` | → 웹: 고정 바 2줄째 + MediaSession `artist` = `<참여 링크>` |
+| (원본 없음 — `Build.MODEL` 자동) | **신규**: 이름 입력 1칸.<br>label `이 기기 이름 (친구 목록에 보입니다)`<br>기본값 = UA-CH model 시도 → 실패 시 플랫폼 추정명(`iPhone`/`Android 폰`/`노트북`).<br>**저장은 `ctx.deviceName`을 통해서만** 한다 — 실제 키는 `lt.shared.deviceName`이고 B도 같은 값을 읽는다(§6). 입력 UI 자체는 A 단독 소유이고 B는 라벨을 만들지 않는다.<br>**웹에는 `Build.MODEL` 등가물이 없다** — iOS Safari·데스크탑은 모델명을 절대 주지 않아서, 그대로 두면 `  님의 소리`가 되고 호스트 2명 구분이 불가능해져 갈아타기 데모가 성립하지 않는다 |
+| 호스트 알림 제목 `같이듣기 — 내 소리 공유 중` | → 웹: 고정 바 1줄째 + **호스트 MediaSession `title`** (잠금화면에서 보인다) |
+| 호스트 알림 본문 `http://<IP>:7980` | → 웹: 고정 바 2줄째 `듣는 사람 <N>명 · <참여 링크>` + MediaSession `artist` = `<참여 링크>`<br>**숫자를 감싸는 문구를 A가 지어내지 않게 `strings.ts`에 `listenerCountText(n)`으로 넣어 동결한다.** 시연 대본이 이 화면을 직접 비추는데(청취자 수 2→1→2), 대시보드의 `clients=2`는 진단 로그 한 줄이라 고정 바 라벨을 대신하지 못한다 |
 | 호스트 알림 액션 `공유 중지` | → 웹: 고정 바 버튼 + **MediaSession `setActionHandler('stop')`** (원본 알림 액션의 직계 대체) |
 
 ### 8.5 리스너 섹션 ('같이 듣기') — B 소유
@@ -1710,17 +1824,22 @@ send({ t: 'room-created', roomId, hostToken, joinUrl: `${origin}/#${roomId}`, re
 
 ```json
 {
-  "dev":        "vite",
-  "build":      "vite build",
-  "typecheck":  "tsc -b",
-  "dev:worker": "wrangler dev --env a",
-  "dev:lan":    "concurrently \"wrangler dev --env a --ip 0.0.0.0\" \"vite --host\"",
-  "deploy:a":   "npm run build && wrangler deploy --env a",
-  "deploy:b":   "npm run build && wrangler deploy --env b",
-  "deploy":     "node scripts/guard-canonical.mjs && npm run build && wrangler deploy",
-  "preview":    "npm run build && wrangler versions upload --env a"
+  "dev":          "vite",
+  "build":        "vite build",
+  "typecheck":    "tsc -b",
+  "dev:worker:a": "wrangler dev --env a",
+  "dev:worker:b": "wrangler dev --env b",
+  "dev:lan:a":    "concurrently \"wrangler dev --env a --ip 0.0.0.0\" \"vite --host\"",
+  "dev:lan:b":    "concurrently \"wrangler dev --env b --ip 0.0.0.0\" \"vite --host\"",
+  "deploy:a":     "npm run build && wrangler deploy --env a",
+  "deploy:b":     "npm run build && wrangler deploy --env b",
+  "deploy":       "node scripts/guard-canonical.mjs && npm run build && wrangler deploy",
+  "preview:a":    "npm run build && wrangler versions upload --env a",
+  "preview:b":    "npm run build && wrangler versions upload --env b"
 }
 ```
+
+**로컬 개발 스크립트도 슬롯별로 둘씩 둔다.** 하나만 두고 `--env a`를 기본값으로 박으면 B는 매번 손으로 플래그를 붙이거나 결국 동결된 package.json에 스크립트 한 줄을 추가하고 싶어진다 — 규칙 2가 금지한 바로 그 행동이고, lockfile은 안 건드려도 package.json 충돌은 난다. A는 `:a`만, B는 `:b`만 쓴다.
 
 `scripts/guard-canonical.mjs`는 ①현재 브랜치가 main인지 ②워킹트리가 깨끗한지 ③터미널에 `CANONICAL`을 타이핑했는지를 검사하고 하나라도 어긋나면 `exit 1`. **canonical 오배포를 사람 기억이 아니라 스크립트로 막는다.**
 
@@ -1830,24 +1949,24 @@ feat(#2): want 플래그 무한 재시도 + 원인별 상태 문구
 |---|---|
 | 1 | 디렉터리 골격: `web/{shared,host,listener,tools}`, `server/`, `scripts/`. **A/B 트리는 빈 디렉터리라도 이때 만들어 소유 경계를 눈에 보이게 한다** |
 | 2 | `.gitignore`에 `node_modules/`, `dist/`, `.wrangler/`, `.dev.vars` 추가 |
-| 3 | `package.json` 작성: `type=module`, engines, scripts 9종([§10](#10-배포-전략)) |
+| 3 | `package.json` 작성: `type=module`, engines, scripts 12종([§10](#10-배포-전략)). **`dev:worker`·`dev:lan`·`preview`는 반드시 `:a`/`:b` 쌍으로 넣는다** — 한쪽만 있으면 나머지 한 사람이 동결된 파일을 열게 된다 |
 | 4 | devDependency 전량 설치 — 반드시 `npm i -D -E`(**캐럿 금지**). 이 설치 이후 lockfile은 두 번 다시 바뀌지 않는다 |
 | 5 | tsconfig 3종. **DOM lib과 workers-types를 한 프로그램에 섞지 않는다** |
 | 6 | `web/shared/experimental-dom.d.ts` — [§6](#6-모듈-진입점-고정-시그니처)의 선언 전량. 상류와 동일 타입으로 병합 선언 |
-| 7 | `vite.config.ts` — root=web, publicDir=false, port 7990 + host:true, outDir=../dist, input 3개(app / mock-host / mock-listener). **포트 7980·7981은 원본 앱이 쓰므로 피한다** |
+| 7 | `vite.config.ts` — root=web, publicDir=false, port 7990 + host:true, outDir=../dist, input 3개(app / mock-host / mock-listener). **포트 7980·7981은 원본 앱이 쓰므로 피한다**.<br>★`server.proxy`를 **여기서 확정해 동결한다**: `{'/ws': {target:'http://127.0.0.1:8787', ws:true}, '/_lobby': {target:'http://127.0.0.1:8787'}}`. 안 넣어두면 A도 B도 "프록시가 있는지 확인"하다가 동결 파일을 동시에 열고, 각자 다른 target 포트로 고쳐 머지 충돌까지 확정된다. 8787은 `wrangler dev` 기본 포트다 |
 | 8 | `web/shared/protocol.ts` — [§5](#5-websharedprotocolts-전문) 전문 + 보강 3건 |
 | 9 | `web/shared/strings.ts` — [§8](#8-한국어-문구-사전) 전량 |
-| 10 | `web/shared/` 나머지: `mount.ts` / `shell.ts` / `ws.ts` / `ice.ts` / `log.ts` |
+| 10 | `web/shared/` 나머지: `mount.ts` / `shell.ts` / `ws.ts` / `ice.ts` / `log.ts`. **export 시그니처는 [§6](#6-모듈-진입점-고정-시그니처)에 고정된 이름 그대로** — `RTC_CONFIG`, `openWs()`를 다른 이름으로 만들면 두 프롬프트가 동시에 틀리고, 그 순간 양쪽 모두 동결 파일을 들여다본다. `mount.ts`의 `selfRoom`·`deviceName` 접근자와 `shell.ts`의 status 2슬롯 합성(` · ` 연결, 둘 다 비면 `대기 중`)까지 이때 배선을 끝낸다 |
 | 11 | `styles/tokens.css` + `shell.css`. **컴포넌트 스타일을 한 줄도 넣지 않는다.** `#lt-deeplink`는 `position:fixed; inset:0; display:none`과 `[data-active]` 토글만 — **배경색조차 넣지 않는다** |
 | 12 | `web/index.html` + `web/main.ts` — **배선까지 완결.** 이후 아무도 이 파일을 열지 않는다 |
 | 13 | `web/host/index.ts` + `host.css`, `web/listener/index.ts` + `listener.css` 스텁. **이 시점에 `npm run dev`로 화면이 뜨고 typecheck가 통과해야 한다** |
 | 14 | MIT 단일 파일 QR을 `web/host/vendor/`로 벤더링 + `qrcode.d.ts` + LICENSE 전문 |
 | 15 | `server/` 작성: `index.ts`(라우팅 + WS 업그레이드 + lobbyKey), `lobby-do.ts`, `room-do.ts`, `lobby-key.ts`, `env.d.ts`. **WebSocket Hibernation(`acceptWebSocket`) 사용.** joinUrl은 `new URL(request.url).origin` |
-| 16 | RoomDO에 에러 케이스를 **v1으로** 구현: 호스트 WS close → 즉시 `host-stopped(gone)`, 60초 유예 후 삭제, 유예 중 동일 토큰 재점유 시 같은 코드. 5번째 리스너에게 `room-full` |
+| 16 | RoomDO에 에러 케이스를 **v1으로** 구현: 호스트 WS close → 즉시 `host-stopped(gone)`, 60초 유예 후 삭제, 유예 중 동일 토큰 재점유 시 같은 코드. 5번째 리스너에게 `room-full`. **`sourceReady` 중계도 여기서 끝낸다** — RoomDO가 `host-announce`의 값을 보관해 `InternalAnnounce`에 싣고, LobbyDO가 변화 시에만 `host-update`에 담는다. 이 필드는 나중에 못 붙인다(생산자가 서버라 protocol.ts와 server/를 동시에 고쳐야 한다 = 동결 파기) |
 | 17 | `wrangler.jsonc` — `env.a` / `env.b`를 **미리** 넣는다. `durable_objects`·`assets`는 비상속 키라 env마다 통째로 다시 적는다. `migrations`는 top-level 하나만. `run_worker_first`를 빼면 SPA 폴백이 `/ws` 업그레이드를 삼켜 **시그널링이 조용히 죽는다** |
 | 18 | `scripts/guard-canonical.mjs` |
-| 19 | `web/tools/mock-host/` — 440Hz + [공유 중지] + **[강제 종료]** |
-| 20 | `web/tools/mock-listener/` — `?code=&name=`로 자동 join→answer→재생 + 1초 가짜 stats, [나가기]/[강제 종료] |
+| 19 | `web/tools/mock-host/` — 440Hz + [공유 중지] + **[강제 종료]**. `?name=`·선택적 `?code=` 수용, **hostToken 키를 `lt.shared.mock-host.<name>`으로 name별 분리**. 키가 공용이면 두 번째 탭이 첫 탭을 밀어내서 B의 '방 두 개 갈아타기'와 '재점유' 시험이 서로를 배제한다 |
+| 20 | `web/tools/mock-listener/` — `?code=&name=`로 자동 join→answer→재생, **실측 getStats 원시 카운터 5종**을 `STATS_MS` 주기로 송신(가짜 값 금지), `host-stopped(gone)` 때 룸 WS를 닫지 않고 재offer 수락, `?stall=<ms>` 스위치, [나가기]/[강제 종료] |
 | 21 | `web/PLAN.md` + `web/CONTRACT.md` 확정 |
 | 22 | **동결 선언** — A·B 두 사람이 [§3 절대 만지지 않는 목록](#3-소유권-규칙)을 **함께 읽는다.** 이후 shared 수정은 미니 Sync로만 |
 | 23 | 커밋은 **사용자가 명시적으로 지시할 때만.** 지시가 오면 단일 커밋 1개: `chore(#0): Step 0 스캐폴드 — shared 동결, 배포 env 분리, mock 2종` |
@@ -1899,6 +2018,28 @@ feat(#2): want 플래그 무한 재시도 + 원인별 상태 문구
 | major | 참여자 간 상호 동기 — 제품 전제가 무검증 통과 | 오프셋 계측 + jitterBufferTarget 동일 고정 + Sync 3 귀 검증 |
 | minor | `CONNECT_TIMEOUT_MS` 등 상수 2종 누락 → 침묵 구간 발생 | protocol.ts 상수에 포함 ([§9](#9-타이밍-상수표)) |
 | minor | 웹 전용 실패 2종(AP 격리 / room-full)의 문구·소유자 미지정 | 배너 슬롯 + 문구 8종 ([§8.7](#87-경고-배너-웹-전용-신규--setbannerowner-text)) |
+
+### 문서 정합성 검증 15건 (3차)
+
+계약과 두 프롬프트를 다 쓴 뒤 한 번 더 공격했다. "A가 시키는 일과 B가 시키는 일이 실제로 같은 파일을 만지는가, 계약이 양쪽에 같은 것을 약속하는가"를 파일·필드 단위로 대조한 결과다. **앞의 두 라운드가 설계를 공격했다면 이번엔 문서 자신을 공격했고, 그래서 critical이 3건 더 나왔다.**
+
+| 등급 | 문제 | 처리 |
+|---|---|---|
+| critical | `sourceReady`가 산문 4곳에 있는데 `protocol.ts`에는 없음 — 서버가 필드를 실어 나르지 않으니 B의 완료 기준이 구현 불가 | 타입 4곳에 추가 ([§5.1](#51-동결-직전-확정된-보강)), 중계 규칙을 [§4.5](#45-서버-규칙)·체크리스트 16에 명시 |
+| critical | 리스너가 `selfRoomId`를 알 방법이 없음 — 방 코드는 A 네임스페이스에만 있고 `MountContext`에 읽기 경로가 없었다. B에게 남은 길이 네임스페이스 위반 아니면 동결 파기뿐 | `ctx.selfRoom` 접근자 추가 ([§6](#6-모듈-진입점-고정-시그니처)). `setRoomLine()`을 shell이 중계하므로 A쪽 추가 작업 0 |
+| critical | `setStatus`의 '호스트 우선' 합성 규칙이 B 문구를 **영구히** 가림 — panel 모드에선 호스트 슬롯이 `대기 중`으로 항상 차 있다. 로비가 통째로 죽어도 화면엔 `대기 중`만 남는다 | 2슬롯 동시 표시(` · ` 연결)로 변경. `대기 중`을 shared 기본값으로 재정의. **계약이 '조용한 실패 금지'를 직접 어기고 있었다** |
+| major | `vite.config.ts`의 `/ws` 프록시가 미규정인데 양쪽 프롬프트가 "있는지 확인해라"고 지시 — 동결 파일을 동시에 열게 만드는 유도 문구 | 프록시를 체크리스트 7에 확정, 두 프롬프트를 확정 서술로 교체 |
+| major | 리스너 `deviceName`의 출처가 어디에도 없음 — `join`의 필수 필드인데 입력 UI는 호스트 전용이었다 | `lt.shared.deviceName` + `ctx.deviceName`로 승격. 입력 UI는 A 단독 소유, B는 읽기만 |
+| major | mock-host 동결 스펙이 B의 필수 시험 2개를 **동시에 만족시킬 수 없음** — 토큰을 보관하면 2탭이 서로를 밀어내고, 안 하면 재점유 시험이 불가 | `boot({name, code?})` + 토큰 키를 `name`별 분리 |
+| major | mock-listener의 '가짜 stats'로는 A의 완료 기준 2개(격리 발동·상호 오프셋)가 원리적으로 검증 불가 | 실측 `getStats` 카운터로 규정 + `?stall=` 예외 + `gone` 때 WS 유지 |
+| minor | 프롬프트의 "문구 전량" 포인터가 §8.2·§8.3을 빠뜨림 — 가장 기본적인 상태 문구를 지어내게 되는 경로 | 포인터 교정 + "§8 통독 후 자기 절로" |
+| minor | 고정 바의 청취자 수 라벨이 사전에 없음 | `listenerCountText(n)` 동결 |
+| minor | `ice.ts`·`ws.ts`의 export 이름이 미고정인데 두 프롬프트가 기정사실로 사용 | [§6](#6-모듈-진입점-고정-시그니처)에 시그니처 고정 |
+| minor | 호스트 MediaSession을 '가청 오디오 우대를 받는 조건'이라 단정 — 조사 verdict는 partial이고 면제 트리거는 가청 오디오다 | 보조책으로 격하, 생존은 가청 오디오+Wake Lock에 귀속 |
+| minor | `jitterBufferTarget` 미지원 시 '예외'라 서술 — 실제로는 조용히 무시된다 | 증상 정정. **틀린 함정 목록은 진짜 원인에서 눈을 돌리게 한다** |
+| minor | 리스너측 48k를 '리샘플러 제거'라 서술 — B의 재생 경로는 AudioContext를 거치지 않는다 | 계측 전용으로 명시, DoD를 기록 항목으로 완화 |
+| minor | `dev:worker`가 `--env a` 기본값 하나뿐이라 B가 동결 파일을 고치고 싶어짐 | 스크립트를 `:a`/`:b` 쌍으로 |
+| minor | PLAN 내부 모순 — 아이폰 호스트를 Q&A만 단정, 본문·리스크·실측 항목은 조건부 | U4 실측 결과에 연동되는 조건부로 |
 
 ---
 
