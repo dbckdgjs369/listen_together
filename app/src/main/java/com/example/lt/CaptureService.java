@@ -544,8 +544,15 @@ public class CaptureService extends Service {
                     server = new ServerSocket(PORT);
                     Log.i(TAG, "http server on " + MainActivity.localIp() + ":" + PORT);
                     while (running) {
-                        Socket s = server.accept();
-                        handleClient(s);
+                        final Socket s = server.accept();
+                        // 받는 스레드에서 직접 처리하면 안 된다. handleClient 는 요청을
+                        // 읽으려고 블로킹하는데, 브라우저는 주소창에 입력하는 순간
+                        // **TCP 만 미리 열어두고(preconnect) 요청은 나중에** 보낸다.
+                        // 그 빈 연결 하나가 뒤의 모든 접속을 줄 세웠다 — 브라우저로
+                        // 들어가면 페이지가 한참 뒤에야 뜨던 원인이 이것이다.
+                        new Thread(new Runnable() {
+                            @Override public void run() { handleClient(s); }
+                        }, "lt-client").start();
                     }
                 } catch (Exception e) {
                     if (running) Log.e(TAG, "server error", e);
@@ -609,6 +616,10 @@ public class CaptureService extends Service {
     private void handleClient(Socket s) {
         try {
             s.setTcpNoDelay(true);
+            // 붙어놓고 아무 말 없는 연결을 영원히 물고 있지 않는다. 스레드를 나눠도
+            // 이게 없으면 그런 연결이 스레드째 쌓인다. 요청 한 줄 보내는 데 5초면
+            // 넉넉하다 — 같은 랜 안이라 왕복이 밀리초 단위다.
+            s.setSoTimeout(5000);
             byte[] tmp = new byte[2048];
             int n = s.getInputStream().read(tmp);
             String req = n > 0 ? new String(tmp, 0, n, "UTF-8") : "";
@@ -641,8 +652,14 @@ public class CaptureService extends Service {
             out.flush();
             clients.add(new Client(s, out));
             Log.i(TAG, "listener connected: " + s.getInetAddress() + " (" + clients.size() + ")");
+        } catch (java.net.SocketTimeoutException e) {
+            // 요청을 안 보내고 열어만 둔 연결. 브라우저 preconnect 가 대표적이라
+            // 정상 동작에 가깝다 — 에러로 시끄럽게 굴 필요 없이 조용히 닫는다.
+            Log.i(TAG, "요청 없는 연결을 닫음: " + s.getInetAddress());
+            try { s.close(); } catch (Exception ignored) { }
         } catch (Exception e) {
             Log.e(TAG, "client setup failed", e);
+            try { s.close(); } catch (Exception ignored) { }
         }
     }
 
