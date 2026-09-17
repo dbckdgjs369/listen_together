@@ -643,15 +643,28 @@ public class CaptureService extends Service {
                 return;
             }
 
-            String headers = "HTTP/1.1 200 OK\r\n"
+            // 사파리는 미디어를 받을 때 `Range: bytes=0-` 를 보내고 206 을 기대하는
+            // 성향이 강하다. 끝이 없는 스트림이라 진짜 길이는 없지만, 아주 큰 값을
+            // 총 길이로 적어주면 "받다 만 파일"로 취급해 계속 재생한다.
+            // iOS 판 서버(ios/LTBroadcast/Server.swift)에 먼저 넣었던 처리를 옮겨온 것.
+            boolean hasRange = req.toLowerCase(java.util.Locale.US).contains("\r\nrange:");
+            long huge = 0x7FFFFFFFFFFFL;
+            String headers = (hasRange
+                    ? "HTTP/1.1 206 Partial Content\r\n"
+                      + "Content-Range: bytes 0-" + (huge - 1) + "/" + huge + "\r\n"
+                    : "HTTP/1.1 200 OK\r\n")
                     + "Content-Type: audio/wav\r\n"
+                    + "Accept-Ranges: bytes\r\n"
                     + "Cache-Control: no-cache\r\n"
                     + "Connection: close\r\n\r\n";
             out.write(headers.getBytes("UTF-8"));
             out.write(wavHeader());
             out.flush();
             clients.add(new Client(s, out));
-            Log.i(TAG, "listener connected: " + s.getInetAddress() + " (" + clients.size() + ")");
+            // 206 인지를 로그에 남긴다. 아이폰이 붙었을 때 Range 를 실제로 보냈는지는
+            // 귀로는 알 수 없고, 이 한 글자가 있어야 로그로 판정할 수 있다.
+            Log.i(TAG, "listener connected: " + s.getInetAddress() + " (" + clients.size() + ")"
+                    + (hasRange ? " range=206" : " range=없음"));
         } catch (java.net.SocketTimeoutException e) {
             // 요청을 안 보내고 열어만 둔 연결. 브라우저 preconnect 가 대표적이라
             // 정상 동작에 가깝다 — 에러로 시끄럽게 굴 필요 없이 조용히 닫는다.
