@@ -14,3 +14,10 @@ xcuserdata/
 DerivedData/
 .swiftpm/
 ios/*/Info.plist
+
+# 웹 포팅 (Step 0)
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.tsbuildinfo
