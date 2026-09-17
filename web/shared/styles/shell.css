@@ -1,0 +1,101 @@
+/* web/shared/styles/shell.css — FROZEN [S0]
+ *
+ * 페이지 골격 · status 2줄 · 배너 슬롯 · 섹션 박스, 그리고 #lt-deeplink 의 position/display 만.
+ *
+ * ★#lt-deeplink 에 **배경색을 넣지 않는다.** 그 안의 DOM 도 배경도 전부 B 소유다(§2).
+ *   여기서 색을 한 줄 정하는 순간 B는 다크 뷰를 만들 때마다 이 파일과 싸우게 된다.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--lt-font);
+  font-size: var(--lt-size-body);
+  line-height: 1.55;
+  color: var(--lt-fg);
+  background: var(--lt-bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ── 셸 ──────────────────────────────────────────────── */
+.lt-shell {
+  max-width: var(--lt-maxw);
+  margin: 0 auto;
+  padding: var(--lt-gap-lg) var(--lt-gap-md) 96px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--lt-gap-md);
+}
+
+/* 딥링크 모드에서 패널 전체를 숨긴다. display:none 이라 mount 도 안 돈다 */
+.lt-shell[data-hidden] {
+  display: none;
+}
+
+.lt-title {
+  font-size: var(--lt-size-title);
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+/* ── status 2줄 ──────────────────────────────────────── */
+/* 1줄째는 host/listener 슬롯을 ' · ' 로 이어 붙인 결과다. 둘 다 비면 '대기 중'. */
+.lt-status {
+  font-size: var(--lt-size-body);
+  color: var(--lt-fg);
+  min-height: 1.55em;
+}
+
+/* 2줄째는 setRoomLine() 이 단독 렌더한다. 링크가 길어 줄바꿈을 허용한다. */
+.lt-roomline {
+  font-size: var(--lt-size-hint);
+  color: var(--lt-fg-dim);
+  min-height: 1.55em;
+  overflow-wrap: anywhere;
+}
+
+/* ── 배너 슬롯 ───────────────────────────────────────── */
+/* 내용은 각 소유자가 넣는다. 셸은 자리와 톤만 잡는다. */
+.lt-banner {
+  display: none;
+}
+
+.lt-banner[data-active] {
+  display: block;
+  font-size: var(--lt-size-hint);
+  color: var(--lt-warn-fg);
+  background: var(--lt-warn-bg);
+  border: 1px solid var(--lt-warn-line);
+  border-radius: var(--lt-radius);
+  padding: var(--lt-gap-sm) var(--lt-gap-md);
+}
+
+/* ── 섹션 박스 ───────────────────────────────────────── */
+/* 안쪽 구성은 host.css / listener.css 소유. 여기는 바깥 테두리까지만. */
+.lt-section {
+  background: var(--lt-section-bg);
+  border: 1px solid var(--lt-line);
+  border-radius: var(--lt-radius);
+  padding: var(--lt-gap-md);
+}
+
+/* ── 딥링크 컨테이너 ─────────────────────────────────── */
+/* ★position 과 display 만. 배경색조차 B 소유다. */
+#lt-deeplink {
+  position: fixed;
+  inset: 0;
+  display: none;
+}
+
+#lt-deeplink[data-active] {
+  display: block;
+}

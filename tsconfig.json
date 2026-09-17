@@ -1,0 +1,14 @@
+{
+  // 루트 매니페스트 3/6 — 솔루션 파일. 여기엔 references 말고 아무것도 넣지 않는다.
+  //
+  // 프로그램을 둘로 쪼개는 이유는 하나다: lib.dom 과 @cloudflare/workers-types 를
+  // 한 프로그램에 섞으면 WebSocket·Request·Response 같은 이름이 서로 다른 모양으로
+  // 두 번 선언돼, 어느 쪽이 이겼는지에 따라 에러가 생겼다 사라졌다 한다.
+  // 그 상태가 되면 각자 루트에 global.d.ts 를 만들기 시작한다.
+  //
+  // vite.config.ts 는 어느 프로그램에도 넣지 않는다. 넣으려면 web 쪽에 node 타입을
+  // 끌어와야 하는데, 그러면 브라우저 코드에서 process 가 보이기 시작한다.
+  // Vite 가 자체 esbuild 로 처리하므로 타입체크 대상에서 빼는 편이 안전하다.
+  "files": [],
+  "references": [{ "path": "./tsconfig.web.json" }, { "path": "./tsconfig.server.json" }]
+}

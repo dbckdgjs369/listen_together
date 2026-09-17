@@ -1,0 +1,79 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+
+  // canonical 슬롯. 개발 중엔 아무도 여기에 배포하지 않는다 —
+  // npm run deploy 는 scripts/guard-canonical.mjs 를 먼저 통과해야 한다.
+  "name": "lt-web",
+  "main": "server/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  // ★ run_worker_first 를 빼면 SPA 폴백이 /ws 업그레이드를 삼켜서
+  //    시그널링이 index.html 을 200 으로 받아들고 조용히 죽는다.
+  //    소켓이 안 열리는 게 아니라 "열렸는데 HTML 이 온다" 라서 제일 찾기 어렵다.
+  "assets": {
+    "directory": "dist",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/ws/*", "/_lobby/*"]
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "LOBBY", "class_name": "LobbyDO" },
+      { "name": "ROOM", "class_name": "RoomDO" }
+    ]
+  },
+
+  // migrations 는 top-level 하나만. env 안에 다시 적으면 상속이 아니라 override 라
+  // 슬롯마다 마이그레이션 이력이 갈라진다.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LobbyDO", "RoomDO"] }],
+
+  // ── 개발 슬롯 ─────────────────────────────────────────────────────────
+  // 워커 스크립트 이름이 다르면 Durable Object 네임스페이스도 완전히 갈린다.
+  // lt-web-a 에서 만든 방코드를 lt-web-b 에 넣으면 room-not-found 여야 정상이고,
+  // 그게 Step 0 검증 관문 (d) 다.
+  //
+  // ★ durable_objects · assets 는 '비상속 키'다. env 마다 통째로 다시 적지 않으면
+  //   바인딩이 없는 채로 배포된다. 아래 중복은 실수가 아니라 요구사항이다.
+  "env": {
+    "a": {
+      "name": "lt-web-a",
+      "workers_dev": true,
+      "observability": { "enabled": true },
+      "assets": {
+        "directory": "dist",
+        "binding": "ASSETS",
+        "html_handling": "auto-trailing-slash",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/ws/*", "/_lobby/*"]
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "LOBBY", "class_name": "LobbyDO" },
+          { "name": "ROOM", "class_name": "RoomDO" }
+        ]
+      }
+    },
+    "b": {
+      "name": "lt-web-b",
+      "workers_dev": true,
+      "observability": { "enabled": true },
+      "assets": {
+        "directory": "dist",
+        "binding": "ASSETS",
+        "html_handling": "auto-trailing-slash",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/ws/*", "/_lobby/*"]
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "LOBBY", "class_name": "LobbyDO" },
+          { "name": "ROOM", "class_name": "RoomDO" }
+        ]
+      }
+    }
+  }
+}

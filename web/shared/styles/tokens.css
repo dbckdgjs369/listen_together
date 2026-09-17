@@ -1,0 +1,39 @@
+/* web/shared/styles/tokens.css — FROZEN [S0]
+ *
+ * 색 · 타이포 · 간격 토큰만. **컴포넌트 스타일을 한 줄도 넣지 않는다.**
+ * 여기에 버튼 하나만 그려도 그 다음부터 A와 B가 "공용 버튼"을 놓고 같은 파일을 연다.
+ *
+ * 타이포는 원본 안드로이드 앱의 sp 값을 그대로 px 로 옮긴 것이다(26/18/14/13).
+ * 원본은 라이트 테마이고, 다크는 딥링크 뷰에만 존재한다 — 그건 listener.css 소유다.
+ */
+:root {
+  /* ── 색 ─────────────────────────────────────────────── */
+  --lt-bg: #ffffff;
+  --lt-fg: #111111;
+  --lt-fg-dim: #666666;
+  --lt-fg-faint: #999999;
+  --lt-line: #e2e5ea;
+  --lt-section-bg: #f7f8fa;
+
+  /* 경고 배너. 원본에 대응물이 없는 웹 전용 슬롯이라 톤만 정해둔다 */
+  --lt-warn-bg: #fff6e5;
+  --lt-warn-fg: #7a4b00;
+  --lt-warn-line: #ffd08a;
+
+  /* ── 타이포 (원본 sp → px) ──────────────────────────── */
+  --lt-font: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR',
+    'Malgun Gothic', sans-serif;
+  --lt-size-title: 26px; /* 화면 제목 '🎧 같이 듣기' */
+  --lt-size-section: 18px; /* 섹션 제목 '내가 틀기' / '같이 듣기' */
+  --lt-size-body: 14px; /* 본문 */
+  --lt-size-hint: 13px; /* 회색 힌트 */
+
+  /* ── 간격 ───────────────────────────────────────────── */
+  --lt-gap-xs: 4px;
+  --lt-gap-sm: 8px;
+  --lt-gap-md: 16px;
+  --lt-gap-lg: 24px;
+
+  --lt-radius: 10px;
+  --lt-maxw: 720px;
+}

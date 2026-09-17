@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mock-listener — 같이 듣기</title>
+  </head>
+  <body>
+    <script type="module">
+      import { boot } from './main.ts';
+      const q = new URLSearchParams(location.search);
+      const stall = q.get('stall');
+      boot({
+        code: q.get('code') ?? '',
+        name: q.get('name') ?? 'mock-listener',
+        stallMs: stall ? Number(stall) : undefined,
+      });
+    </script>
+  </body>
+</html>

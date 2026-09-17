@@ -1,0 +1,33 @@
+{
+  "name": "listen-together-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "같이 듣기 — 웹 포팅(호스트/리스너) + Cloudflare Workers 시그널링",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -b",
+    "dev:worker:a": "wrangler dev --env a",
+    "dev:worker:b": "wrangler dev --env b",
+    "dev:lan:a": "concurrently \"wrangler dev --env a --ip 0.0.0.0\" \"vite --host\"",
+    "dev:lan:b": "concurrently \"wrangler dev --env b --ip 0.0.0.0\" \"vite --host\"",
+    "deploy:a": "npm run build && wrangler deploy --env a",
+    "deploy:b": "npm run build && wrangler deploy --env b",
+    "deploy": "node scripts/guard-canonical.mjs && npm run build && wrangler deploy",
+    "preview:a": "npm run build && wrangler versions upload --env a",
+    "preview:b": "npm run build && wrangler versions upload --env b"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260917.1",
+    "@types/node": "22.20.3",
+    "concurrently": "10.0.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.1",
+    "wrangler": "4.133.0"
+  }
+}

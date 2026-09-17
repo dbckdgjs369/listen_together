@@ -1,0 +1,26 @@
+{
+  // 루트 매니페스트 5/6 — Workers 프로그램. lib 에 DOM 이 없고 workers-types 만 들어간다.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "composite": true,
+    "noEmit": true
+  },
+
+  // protocol.ts 는 web/ 아래 있지만 서버도 같은 계약을 읽어야 하므로 이 프로그램에도 들어온다.
+  // 계약 파일이 DOM 타입을 하나도 안 쓰기 때문에 가능한 일이다 — 그 성질을 깨면 여기가 먼저 터진다.
+  "include": ["server/**/*.ts", "web/shared/protocol.ts"]
+}

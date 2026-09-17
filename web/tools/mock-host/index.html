@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mock-host — 같이 듣기</title>
+  </head>
+  <body>
+    <script type="module">
+      import { boot } from './main.ts';
+      const q = new URLSearchParams(location.search);
+      boot({
+        name: q.get('name') ?? 'mock-host',
+        code: q.get('code') ?? undefined,
+      });
+    </script>
+  </body>
+</html>
