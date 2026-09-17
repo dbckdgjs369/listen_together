@@ -241,9 +241,18 @@ public class MainActivity extends Activity {
         });
         Button hsOff = ghost("끄기", new View.OnClickListener() {
             @Override public void onClick(View v) {
-                if (reservation != null) { reservation.close(); reservation = null; }
+                if (reservation != null) {
+                    reservation.close();
+                    reservation = null;
+                    showQr(null, null);
+                    render(CaptureService.sharing ? "공유 중" : "대기 중");
+                    return;
+                }
                 showQr(null, null);
-                render(CaptureService.sharing ? "공유 중" : "대기 중");
+                // 설정에서 켠 핫스팟은 우리가 못 끈다. 끌 게 없는데 아무 말도 없으면
+                // 눌렀는데 안 꺼진 것처럼 보인다 — 그것도 침묵으로 속이는 것이다.
+                if (hotspotUp()) notice("설정에서 켠 핫스팟은 앱이 끄지 못합니다");
+                else render(CaptureService.sharing ? "공유 중" : "대기 중");
             }
         });
         LinearLayout.LayoutParams w2 = new LinearLayout.LayoutParams(
@@ -530,9 +539,35 @@ public class MainActivity extends Activity {
         dot.setBackground(g);
     }
 
+    /**
+     * 잠깐 띄우는 알림. **주기 렌더보다 우선한다.**
+     *
+     * joinTicker 가 0.5 초마다 render("대기 중") 을 쓰기 때문에, 그냥 render 로 띄운
+     * 메시지는 반 초 만에 지워진다. 핫스팟이 권한 예외로 실패했을 때 화면에는
+     * 아무 일도 안 일어난 것처럼 보였다 — 로그를 안 봤으면 기종 문제로 오진할 뻔했다.
+     *
+     * 공유 중일 때도 이게 이긴다. 듣는 사람 수보다 "왜 안 됐는지" 가 급하다.
+     */
+    private void notice(String msg) {
+        notice = msg;
+        noticeUntil = SystemClock.elapsedRealtime() + NOTICE_MS;
+        render(msg);
+    }
+
+    private String notice;
+    private long noticeUntil;
+
+    /** 한 문장을 읽을 만큼은 되고, 듣는 사람 수를 오래 가리지는 않을 만큼. */
+    private static final long NOTICE_MS = 5000;
+
     private void render(String state) {
         boolean live = CaptureService.sharing;
-        if (live) {
+        // 만료된 알림은 여기서 버린다. 그러면 다음 줄이 알아서 원래 상태를 되돌린다.
+        if (notice != null && SystemClock.elapsedRealtime() >= noticeUntil) notice = null;
+
+        if (notice != null) {
+            status.setText(notice);
+        } else if (live) {
             int n = CaptureService.listeners;
             status.setText(n > 0 ? "공유 중 · " + n + "명이 듣는 중" : "공유 중 · 기다리는 중");
         } else {
@@ -608,7 +643,7 @@ public class MainActivity extends Activity {
         if (requestCode != REQ_PERMS) return;
         for (int r : grantResults) {
             if (r != PackageManager.PERMISSION_GRANTED) {
-                render("권한이 거부되었습니다");
+                notice("권한이 거부되었습니다");
                 return;
             }
         }
@@ -620,7 +655,7 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQ_PROJECTION) return;
         if (resultCode != RESULT_OK || data == null) {
-            render("화면 캡처 동의가 취소되었습니다");
+            notice("화면 캡처 동의가 취소되었습니다");
             return;
         }
         // 다음에도 같은 이름을 쓰게 저장한다. 매번 다시 적게 하면 결국 아무도 안 적는다.
@@ -652,7 +687,7 @@ public class MainActivity extends Activity {
     private void askIgnoreBatteryOptimization() {
         PowerManager pm = getSystemService(PowerManager.class);
         if (pm.isIgnoringBatteryOptimizations(getPackageName())) {
-            render("이미 배터리 최적화에서 제외되어 있습니다");
+            notice("이미 배터리 최적화에서 제외되어 있습니다");
             return;
         }
         try {
@@ -668,6 +703,13 @@ public class MainActivity extends Activity {
     // ── 핫스팟 (LocalOnlyHotspot 실현 가능성 확인용) ──
 
     private static WifiManager.LocalOnlyHotspotReservation reservation;
+
+    /**
+     * 핫스팟 요청 일련번호. 감시 타이머가 **자기가 건 요청**에만 반응하게 하는 표다.
+     * 콜백이 오면 번호를 올려 타이머를 무효로 만든다 — 안 그러면 실패 메시지를
+     * 띄운 12초 뒤에 "응답하지 않습니다" 가 그 위를 덮는다.
+     */
+    private long hotspotReq;
 
     /**
      * 핫스팟 접속 QR 을 띄운다. ssid 가 null 이면 감춘다.
@@ -716,17 +758,51 @@ public class MainActivity extends Activity {
                 .replace(",", "\\,").replace(":", "\\:").replace("\"", "\\\"");
     }
 
+    /**
+     * 우리가 띄운 핫스팟의 SSID·비밀번호. 못 읽으면 null.
+     *
+     * **버전마다 읽는 법이 다르다.** `getSoftApConfiguration()` 은 API 30 부터라
+     * 안드로이드 10 에서 부르면 `NoSuchMethodError` 가 난다 — 예외가 아니라 Error 라
+     * 무심코 `catch (Exception)` 으로 감싸면 그대로 앱이 죽는다. 노트9 에서 핫스팟은
+     * 멀쩡히 떴는데 QR 만 안 나오던 게 이것 때문이었다. 그런데 QR 이 이 기능의 전부다 —
+     * 비번을 불러주지 않아도 되게 하려고 만든 것이니까.
+     */
+    private static String[] readApConfig(WifiManager.LocalOnlyHotspotReservation res) {
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                SoftApConfiguration c = res.getSoftApConfiguration();
+                if (c == null || c.getPassphrase() == null) return null;
+                return new String[]{String.valueOf(c.getSsid()), c.getPassphrase()};
+            }
+            android.net.wifi.WifiConfiguration c = res.getWifiConfiguration();
+            if (c == null || c.SSID == null || c.preSharedKey == null) return null;
+            // 구형 WifiConfiguration 은 SSID 를 따옴표로 감싸서 주는 경우가 있다.
+            // 그대로 QR 에 넣으면 따옴표까지 이름의 일부가 되어 접속이 안 된다.
+            return new String[]{unquote(c.SSID), unquote(c.preSharedKey)};
+        } catch (Throwable t) {
+            Log.w(CaptureService.TAG, "HOTSPOT config unreadable", t);
+            return null;
+        }
+    }
+
+    private static String unquote(String s) {
+        if (s != null && s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
+    }
+
     private void tryLocalHotspot() {
         // 이미 켜져 있으면 다시 요청하지 않는다. 그냥 부르면 시스템이
         // IllegalStateException("Caller already has an active LocalOnlyHotspot request")
         // 를 던진다 — 버튼을 두 번 누른 것뿐인데 예외가 나던 자리다.
         if (reservation != null) {
-            try {
-                SoftApConfiguration c = reservation.getSoftApConfiguration();
-                showQr(String.valueOf(c.getSsid()), String.valueOf(c.getPassphrase()));
-                render("핫스팟은 이미 켜져 있습니다");
-            } catch (Throwable t) {
-                render("핫스팟은 켜져 있으나 설정을 읽을 수 없습니다 — " + t);
+            String[] cfg = readApConfig(reservation);
+            if (cfg != null) {
+                showQr(cfg[0], cfg[1]);
+                notice("핫스팟은 이미 켜져 있습니다");
+            } else {
+                notice("핫스팟은 켜져 있으나 비밀번호를 읽을 수 없습니다 — 설정에서 확인하세요");
             }
             return;
         }
@@ -742,24 +818,65 @@ public class MainActivity extends Activity {
                 return;
             }
         }
-        render("핫스팟 요청 중…");
         WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+
+        // 여기서 미리 막지 않으면 **콜백이 영영 안 온다.** 비행기모드면 시스템이
+        // 요청을 받아놓고 조용히 버린다(WifiController: "drop softap requests when in
+        // airplane mode") — onStarted 도 onFailed 도 안 불린다. 그러면 화면은
+        // "요청 중…" 에서 멈춰 있다가 아무 설명 없이 원래대로 돌아간다.
+        // 실패를 못 알리느니 아예 시작을 안 하고 이유를 말하는 편이 낫다.
+        if (Settings.Global.getInt(getContentResolver(),
+                Settings.Global.AIRPLANE_MODE_ON, 0) != 0) {
+            notice("비행기모드에서는 핫스팟을 켤 수 없습니다");
+            return;
+        }
+        if (wm == null) {
+            notice("이 기기에서 Wi-Fi 를 쓸 수 없습니다");
+            return;
+        }
+        // **Wi-Fi 가 켜져 있는지는 보지 않는다.** 한때 여기서 막았는데 틀렸다 —
+        // 노트9 에서 Wi-Fi 를 끈 채로 핫스팟이 멀쩡히 떴다(swlan0 192.168.43.1).
+        // 핫스팟은 Wi-Fi 접속(STA)과 별개로 도는 기능이라 켜져 있을 이유가 없다.
+
+        // 설정에서 켠 핫스팟이 이미 떠 있으면 요청해도 ERROR_INCOMPATIBLE_MODE 로 떨어진다.
+        // 그런데 사용자한테 이건 실패가 아니다 — 핫스팟은 켜져 있고, 주소 칸에는 이미
+        // 그 주소가 떠 있으며, 앱은 그걸로 잘 돈다. "실패" 라고 하면 멀쩡한 상황을
+        // 고장난 것처럼 보이게 만든다. SSID/비번을 읽는 공개 API 가 없어 QR 만 못 그린다.
+        if (hotspotUp()) {
+            notice("핫스팟이 이미 켜져 있습니다 — 친구는 설정에 뜬 비밀번호로 붙으면 됩니다");
+            return;
+        }
+
+        notice("핫스팟 요청 중…");
+        // 콜백이 안 오는 길이 또 있을 수 있다. 비행기모드는 위에서 걸렀지만
+        // 그게 유일한 경우라는 보장이 없으니, 잠잠하면 잠잠하다고 말하게 한다.
+        // 말없이 원래 화면으로 돌아가는 것보다 낫다.
+        final long ticket = ++hotspotReq;
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (ticket == hotspotReq && reservation == null) {
+                    notice("핫스팟이 응답하지 않습니다 — 설정에서 직접 켜 보세요");
+                }
+            }
+        }, 12000);
         try {
             wm.startLocalOnlyHotspot(new WifiManager.LocalOnlyHotspotCallback() {
                 @Override
                 public void onStarted(WifiManager.LocalOnlyHotspotReservation res) {
+                    hotspotReq++;   // 감시 타이머 무효화
                     reservation = res;
-                    String ssid = "?", pw = "?";
-                    try {
-                        SoftApConfiguration c = res.getSoftApConfiguration();
-                        ssid = String.valueOf(c.getSsid());
-                        pw = String.valueOf(c.getPassphrase());
-                    } catch (Throwable t) {
-                        ssid = "설정을 읽을 수 없음: " + t;
+                    String[] cfg = readApConfig(res);
+                    Log.i(CaptureService.TAG, "HOTSPOT ok cfg="
+                            + (cfg == null ? "null" : cfg[0] + "/" + cfg[1]));
+                    final String s = cfg == null ? null : cfg[0];
+                    final String p = cfg == null ? null : cfg[1];
+                    if (cfg == null) {
+                        // 설정을 못 읽으면 QR 은 없다. 그래도 핫스팟은 켜졌으니
+                        // 어디서 비번을 보는지는 알려준다.
+                        notice("핫스팟 켜짐 — 비밀번호는 설정 > 핫스팟에서 확인하세요");
+                    } else {
+                        notice("핫스팟 켜짐");
                     }
-                    Log.i(CaptureService.TAG, "HOTSPOT ok ssid=" + ssid + " pw=" + pw);
-                    render("핫스팟 켜짐");
-                    final String s = ssid, p = pw;
                     ui.post(new Runnable() {
                         @Override public void run() { showQr(s, p); }
                     });
@@ -767,6 +884,7 @@ public class MainActivity extends Activity {
 
                 @Override
                 public void onFailed(int reason) {
+                    hotspotReq++;   // 감시 타이머 무효화
                     String why;
                     switch (reason) {
                         case WifiManager.LocalOnlyHotspotCallback.ERROR_NO_CHANNEL:
@@ -781,18 +899,19 @@ public class MainActivity extends Activity {
                             why = "알 수 없음(" + reason + ")";
                     }
                     Log.w(CaptureService.TAG, "HOTSPOT failed: " + why);
-                    render("핫스팟 실패 — " + why);
+                    notice("핫스팟 실패 — " + why);
                 }
 
                 @Override
                 public void onStopped() {
                     Log.i(CaptureService.TAG, "HOTSPOT stopped");
-                    render("핫스팟이 중지되었습니다");
+                    notice("핫스팟이 중지되었습니다");
                 }
             }, ui);
         } catch (Throwable t) {
+            hotspotReq++;   // 감시 타이머 무효화
             Log.e(CaptureService.TAG, "HOTSPOT threw", t);
-            render("핫스팟 호출 예외 — " + t);
+            notice("핫스팟 호출 예외 — " + t);
         }
     }
 
@@ -1138,6 +1257,25 @@ public class MainActivity extends Activity {
                 if (!nif.isUp()) continue;
                 for (InetAddress a : Collections.list(nif.getInetAddresses())) {
                     if (a instanceof Inet4Address && ip.equals(a.getHostAddress())) return true;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    /**
+     * 핫스팟이 이미 떠 있나. **인터페이스 이름으로 본다** — 켜졌는지 묻는 공개 API 가
+     * 없다(`getWifiApState` 는 @hide). 판정 규칙은 아래 localIps 와 같은 것을 쓴다.
+     */
+    static boolean hotspotUp() {
+        try {
+            for (NetworkInterface nif : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (nif.isLoopback() || !nif.isUp()) continue;
+                String name = nif.getName();
+                if (!name.startsWith("swlan") && !name.startsWith("ap")) continue;
+                for (InetAddress a : Collections.list(nif.getInetAddresses())) {
+                    if (a instanceof Inet4Address && !a.isLoopbackAddress()) return true;
                 }
             }
         } catch (Exception ignored) {

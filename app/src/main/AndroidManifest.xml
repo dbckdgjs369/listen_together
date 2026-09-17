@@ -9,6 +9,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!--
+        핫스팟에 필요하다. 없으면 startLocalOnlyHotspot 이
+        "SecurityException: ConnectivityService: Neither user … nor current process
+        has android.permission.ACCESS_NETWORK_STATE" 로 떨어진다.
+
+        안드로이드 14 는 그냥 통과시켜서, 신형 기기로만 시험하면 절대 안 걸린다.
+        노트9(안드로이드 10)에서만 재현됐다.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 비콘을 받으려면 필요하다. 이유는 startDiscovery 주석에 적어놨다. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
