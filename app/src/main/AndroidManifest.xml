@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- 비콘을 받으려면 필요하다. 이유는 startDiscovery 주석에 적어놨다. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -34,9 +36,9 @@
     </queries>
 
     <application
-        android:label="같이듣기 PoC"
+        android:label="같이 듣기"
         android:icon="@android:drawable/ic_media_play"
-        android:theme="@android:style/Theme.Material.Light">
+        android:theme="@style/AppTheme">
 
         <activity
             android:name=".MainActivity"

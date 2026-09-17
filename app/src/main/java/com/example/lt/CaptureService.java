@@ -56,7 +56,19 @@ public class CaptureService extends Service {
     public static final int BEACON_PORT = 7981;
     public static final String EXTRA_CODE = "code";
     public static final String EXTRA_DATA = "data";
+    public static final String EXTRA_ROOM_NAME = "roomName";
     public static final String ACTION_STOP = "com.example.lt.STOP";
+
+    /**
+     * 방 이름 최대 길이.
+     *
+     * 수신 버퍼가 256바이트인데 한글은 UTF-8 로 글자당 3바이트다. 20자면 60바이트라
+     * 나머지 필드(ID·IP·잠금)를 다 합쳐도 한참 남는다. 길이를 안 자르면 긴 이름
+     * 하나가 패킷을 넘겨서 **그 방만 조용히 안 보이는** 상태가 된다.
+     */
+    private static final int MAX_ROOM_NAME = 20;
+    /** 비밀번호를 이 횟수만큼 틀린 주소는 방이 끝날 때까지 받지 않는다. */
+    private static final int PW_MAX_FAILS = 10;
 
     /**
      * 기기 네이티브 샘플레이트에 맞춘다. 요즘 안드로이드 기기는 거의 다 48000 이다.
@@ -96,6 +108,40 @@ public class CaptureService extends Service {
     private AudioTrack keepAlive;
     private ServerSocket server;
     private volatile boolean running;
+
+    /**
+     * 공유 중인가. 화면이 버튼 라벨("공유 시작"/"공유 중지")을 정하는 데 쓴다.
+     *
+     * getRunningServices() 로 매번 물어볼 수도 있지만 그건 전체 서비스 목록을 훑는
+     * 호출이라 0.5초마다 때릴 물건이 아니다. PlayerService.currentHost 와 같은 방식이다.
+     */
+    public static volatile boolean sharing;
+    /** 지금 듣고 있는 사람 수. 호스트 화면에 그대로 띄운다. */
+    public static volatile int listeners;
+
+    /**
+     * 방 하나 = 공유 한 번. 세 값 다 공유를 시작할 때 새로 정해지고 중지하면 버린다.
+     *
+     * roomId 가 따로 있는 이유는 **한 방이 인터페이스 수만큼 비콘을 쏘기 때문**이다.
+     * Wi-Fi 와 핫스팟이 같이 켜져 있으면 같은 방이 주소만 다른 두 줄로 목록에 뜬다.
+     * 받는 쪽이 이 ID 로 묶어야 한 줄이 된다.
+     */
+    public static volatile String roomId = "";
+    /** 목록에 뜨는 이름. 호스트가 정하고, 비워두면 기기 모델명을 쓴다. */
+    public static volatile String roomName = "";
+    /** 입장 비밀번호 4자리. 공유할 때마다 새로 뽑는다. */
+    public static volatile String roomPw = "";
+
+    /**
+     * 비밀번호를 틀린 주소 → {누적 실패 횟수, 다음 시도 허용 시각(ms)}.
+     *
+     * 4자리는 1만 가지뿐이라 스크립트로 몇 분이면 전부 훑을 수 있다. 사람이 손으로
+     * 오타 내는 건 그대로 두고 자동 대입만 못 하게, 틀릴 때마다 다음 시도까지의
+     * 대기를 2배씩 늘린다(최대 8초). 응답을 붙잡고 자는 게 아니라 **거절을 즉시
+     * 돌려주므로** 공격자가 스레드를 쌓아 올릴 수도 없다.
+     */
+    private final java.util.Map<String, long[]> pwFails =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
@@ -163,6 +209,7 @@ public class CaptureService extends Service {
             if (!alive) return;
             alive = false;
             clients.remove(this);
+            listeners = clients.size();
             queue.clear();
             try { out.close(); } catch (Exception ignored) { }
             try { sock.close(); } catch (Exception ignored) { }
@@ -178,6 +225,15 @@ public class CaptureService extends Service {
         }
         if (running) return START_NOT_STICKY;
         if (intent == null) { stopSelf(); return START_NOT_STICKY; }
+
+        // 방을 먼저 연다. 알림이 비밀번호를 싣고, 비콘이 이름과 잠금 상태를 싣는다 —
+        // 둘 다 이 값들이 이미 정해져 있어야 한다. 순서가 뒤바뀌면 첫 알림에 빈칸이
+        // 뜨거나 첫 비콘이 이름 없이 나간다.
+        roomName = sanitizeRoomName(intent.getStringExtra(EXTRA_ROOM_NAME));
+        roomId = newRoomId();
+        roomPw = newPw();
+        pwFails.clear();
+        Log.i(TAG, "방 열림 id=" + roomId + " 이름=" + roomName);
 
         // 1) API 34+ 는 MediaProjection 생성 전에 FGS 가 떠 있어야 한다.
         startForegroundCompat();
@@ -209,6 +265,42 @@ public class CaptureService extends Service {
         startServer();
         startBeacon();
         return START_NOT_STICKY;
+    }
+
+    /**
+     * 방 이름을 비콘에 실을 수 있는 모양으로 다듬는다.
+     *
+     * `|` 를 반드시 걷어내야 한다. 비콘이 `|` 로 필드를 나누는데 이름에 그게 섞이면
+     * 받는 쪽 split 이 한 칸씩 밀려서 **IP 자리에 이름 조각이 들어간다.** 길이 검사는
+     * 통과하므로 목록에는 멀쩡히 뜨고, 누르면 그런 주소를 찾다가 조용히 실패한다.
+     * 원본이 normalizeHost() 로 30분을 태웠던 것과 같은 종류의 함정이다.
+     */
+    static String sanitizeRoomName(String raw) {
+        String s = raw == null ? "" : raw.trim();
+        s = s.replace('|', ' ').replace('\r', ' ').replace('\n', ' ').trim();
+        if (s.isEmpty()) s = Build.MODEL;
+        if (s.length() > MAX_ROOM_NAME) s = s.substring(0, MAX_ROOM_NAME).trim();
+        return s;
+    }
+
+    /** 방 식별자 6자리 16진수. 사람이 볼 일은 없고 목록에서 같은 방을 묶는 데만 쓴다. */
+    private static String newRoomId() {
+        byte[] b = new byte[3];
+        new java.security.SecureRandom().nextBytes(b);
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format(java.util.Locale.US, "%02x", x));
+        return sb.toString();
+    }
+
+    /**
+     * 입장 비밀번호 4자리.
+     *
+     * 호스트가 직접 정하게 두지 않는 이유는 사람이 고르면 `1234`·`0000` 으로 몰리기
+     * 때문이다. 불러주기만 하면 되는 값이라 외울 필요도 없다.
+     */
+    private static String newPw() {
+        return String.format(java.util.Locale.US, "%04d",
+                new java.security.SecureRandom().nextInt(10000));
     }
 
     /**
@@ -258,9 +350,26 @@ public class CaptureService extends Service {
         PendingIntent openPi = PendingIntent.getActivity(this, 0, open,
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
+        // 접힌 알림은 한 줄뿐이라 대표 주소만, 펼치면 전부 보인다.
+        // 핫스팟과 Wi-Fi 가 같이 떠 있으면 친구가 어느 쪽에 있는지 우리는 모른다.
+        java.util.List<String> ips = MainActivity.localIps();
+        StringBuilder all = new StringBuilder();
+        for (String ip : ips) {
+            if (all.length() > 0) all.append('\n');
+            all.append("http://").append(ip).append(':').append(PORT);
+        }
+        if (all.length() == 0) all.append("네트워크 없음");
+
+        // 비밀번호를 알림에 싣는다. 친구한테 불러주려고 매번 앱을 열게 하지 않는다 —
+        // 화면을 끄고 주머니에 넣은 뒤에 늦게 합류하는 사람이 생기는 게 흔한 경우다.
+        String pwLine = roomPw.isEmpty() ? "" : "비밀번호 " + roomPw + "\n";
+
         Notification n = new Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("같이듣기 — 내 소리 공유 중")
-                .setContentText("http://" + MainActivity.localIp() + ":" + PORT)
+                .setContentTitle("같이듣기 — " + roomName)
+                .setContentText(roomPw.isEmpty() ? "http://" + MainActivity.localIp() + ":" + PORT
+                        : "비밀번호 " + roomPw + " · " + MainActivity.localIp())
+                .setStyle(new Notification.BigTextStyle().bigText(
+                        pwLine + (ips.size() > 1 ? "되는 것으로 하나 골라 접속:\n" + all : all.toString())))
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentIntent(openPi)
                 .addAction(new Notification.Action.Builder(null, "공유 중지", pi).build())
@@ -335,22 +444,14 @@ public class CaptureService extends Service {
                         .addMatchingUsage(AudioAttributes.USAGE_GAME)
                         .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN);
 
-        // addMatchingUid 를 한 번이라도 부르면 화이트리스트가 된다 —
-        // 지정하지 않은 앱의 소리는 전혀 들어오지 않는다.
-        // 선택이 비어 있으면(=모든 앱 허용) 아무것도 부르지 않는다.
-        Set<String> pkgs = MainActivity.loadSelectedApps(this);
-        int matched = 0;
-        for (String pkg : pkgs) {
-            try {
-                cb.addMatchingUid(getPackageManager().getPackageUid(pkg, 0));
-                matched++;
-            } catch (Exception e) {
-                Log.w(TAG, "uid 조회 실패, 건너뜀: " + pkg);
-            }
-        }
-        Log.i(TAG, matched == 0
-                ? "capture scope = 모든 앱"
-                : "capture scope = " + matched + "개 앱 " + pkgs);
+        // 앱별 화이트리스트(addMatchingUid)는 걷어냈다. 체크박스 11개를 세워두고
+        // "여기서 고른 것만 나갑니다"라고 설명하는 비용이, 그걸로 얻는 것보다 컸다.
+        // 어차피 USAGE_MEDIA/GAME 필터가 알림음·통화를 이미 막고 있어서
+        // 실제로 새어나갈 게 음악·영상뿐이다.
+        //
+        // addMatchingUid 는 **한 번이라도 부르면** 화이트리스트가 되므로,
+        // 지금처럼 아무것도 부르지 않는 것이 "모든 앱 허용"이다.
+        Log.i(TAG, "capture scope = 모든 앱 (USAGE_MEDIA/GAME/UNKNOWN)");
 
         AudioPlaybackCaptureConfiguration config = cb.build();
 
@@ -384,6 +485,7 @@ public class CaptureService extends Service {
                 .setAudioPlaybackCaptureConfig(config)
                 .build();
         record.startRecording();
+        sharing = true;
 
         // 요청한 크기를 HAL 이 그대로 주지 않을 수 있다. 실제로 잡힌 값을 확인해야
         // "버퍼를 키웠는데 왜 그대로냐"를 헛짚지 않는다.
@@ -599,7 +701,13 @@ public class CaptureService extends Service {
                     if (bcast == null) continue;
                     InetAddress local = ia.getAddress();
                     if (!(local instanceof Inet4Address)) continue;
-                    byte[] msg = ("LT1|" + Build.MODEL + "|" + local.getHostAddress())
+                    // LT2|방ID|방이름|주소|잠김
+                    //
+                    // 비밀번호 자체는 절대 싣지 않는다 — 비콘은 서브넷 전체가 듣는다.
+                    // 잠김 여부만 알려서 목록에 자물쇠를 띄우게 한다. 주소를 계속
+                    // 뿌려도 되는 건 이제 문에 자물쇠가 달렸기 때문이다.
+                    byte[] msg = ("LT2|" + roomId + "|" + roomName + "|"
+                            + local.getHostAddress() + "|" + (roomPw.isEmpty() ? "0" : "1"))
                             .getBytes("UTF-8");
                     try {
                         ds.send(new DatagramPacket(msg, msg.length, bcast, BEACON_PORT));
@@ -629,6 +737,22 @@ public class CaptureService extends Service {
             if (sp1 >= 0 && sp2 > sp1) path = req.substring(sp1 + 1, sp2);
 
             OutputStream out = s.getOutputStream();
+            String peer = String.valueOf(s.getInetAddress().getHostAddress());
+
+            // 비밀번호만 확인하고 끊는 창구. 브라우저 전용이다.
+            //
+            // <audio> 는 실패해도 **HTTP 상태 코드를 안 알려준다.** 그래서 페이지가
+            // "비밀번호가 틀림" 과 "Wi-Fi 가 끊김" 을 구분하지 못하고, 틀린 비밀번호로
+            // 영원히 재접속하면서 '재접속 중…' 만 띄운다. 그 둘을 가르려고 둔다.
+            if (path.startsWith("/check")) {
+                int deny = checkPw(peer, param(path, "pw"));
+                if (deny != 0) writeDenied(out, deny);
+                else out.write(("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                        .getBytes("UTF-8"));
+                out.flush();
+                s.close();
+                return;
+            }
 
             if (!path.startsWith("/stream")) {
                 // 참여자용 페이지. 모바일 브라우저는 사용자 제스처가 있어야 재생을 시작한다.
@@ -638,6 +762,18 @@ public class CaptureService extends Service {
                         + "Content-Length: " + html.length + "\r\n"
                         + "Connection: close\r\n\r\n").getBytes("UTF-8"));
                 out.write(html);
+                out.flush();
+                s.close();
+                return;
+            }
+
+            // ★검사는 반드시 여기다. 목록 화면에만 비밀번호를 걸면 아무 의미가 없다 —
+            //   브라우저에 http://<주소>:7980/stream 을 그대로 치면 그냥 나오기 때문이다.
+            //   소리가 나가는 길은 이 한 곳뿐이라, 자물쇠도 여기 하나만 달면 된다.
+            int deny = checkPw(peer, param(path, "pw"));
+            if (deny != 0) {
+                Log.w(TAG, "입장 거부 " + peer + " → " + deny);
+                writeDenied(out, deny);
                 out.flush();
                 s.close();
                 return;
@@ -661,6 +797,7 @@ public class CaptureService extends Service {
             out.write(wavHeader());
             out.flush();
             clients.add(new Client(s, out));
+            listeners = clients.size();
             // 206 인지를 로그에 남긴다. 아이폰이 붙었을 때 Range 를 실제로 보냈는지는
             // 귀로는 알 수 없고, 이 한 글자가 있어야 로그로 판정할 수 있다.
             Log.i(TAG, "listener connected: " + s.getInetAddress() + " (" + clients.size() + ")"
@@ -676,6 +813,78 @@ public class CaptureService extends Service {
         }
     }
 
+    /**
+     * 입장 비밀번호 검사. **0 이면 통과**, 아니면 그대로 돌려줄 HTTP 상태 코드다.
+     *
+     * 실패한 주소를 점점 더 오래 기다리게 만든다(1→2→4→8초). 사람이 두어 번 오타
+     * 내는 건 체감이 없고, 초당 수십 번 때리는 스크립트는 여기서 멈춘다.
+     * 10번 틀리면 방이 끝날 때까지 그 주소를 안 받는다 — 방은 몇 시간짜리라
+     * 영구 차단이 아니고, 잘못 막혀도 호스트가 공유를 다시 시작하면 풀린다.
+     */
+    private int checkPw(String peer, String given) {
+        if (roomPw.isEmpty()) return 0;               // 잠그지 않은 방
+
+        // ★맞는 비밀번호는 **무조건 먼저** 통과시킨다. 지연보다 위에 둬야 한다.
+        //   지연을 먼저 보면, 한 번 오타 낸 사람이 곧바로 제대로 고쳐 넣어도
+        //   "시도가 너무 많습니다" 를 받는다 — 본인은 방금 맞게 쳤는데.
+        //   무차별 대입을 실제로 막는 건 지연이 아니라 아래의 10회 상한이다.
+        //   지연은 속도만 늦출 뿐이고, 상한이 시도 횟수 자체를 1만분의 10으로 묶는다.
+        if (roomPw.equals(given)) {
+            pwFails.remove(peer);                     // 맞혔으면 과거는 없던 일로
+            return 0;
+        }
+
+        long now = System.currentTimeMillis();
+        long[] st = pwFails.get(peer);
+        if (st != null) {
+            if (st[0] >= PW_MAX_FAILS) return 429;
+            if (now < st[1]) return 429;
+        }
+
+        // ★첫 실패에는 지연을 안 준다. 재생 페이지가 실패 직후 /check 로 이유를
+        //   되묻는데(<audio> 가 상태 코드를 안 주므로), 여기서 바로 잠그면 그 질문이
+        //   429 를 받아서 **틀린 비밀번호가 '시도 초과' 로 둔갑한다.**
+        //   공격자가 얻는 건 공짜 시도 한 번뿐이고, 상한은 그대로 10회다.
+        long fails = st == null ? 1 : st[0] + 1;
+        long wait = fails <= 1 ? 0 : Math.min(1000L << Math.min(fails - 2, 3), 8000L);
+        pwFails.put(peer, new long[]{fails, now + wait});
+        return 401;
+    }
+
+    private void writeDenied(OutputStream out, int code) throws Exception {
+        String reason = code == 401 ? "Unauthorized" : "Too Many Requests";
+        byte[] body = (code == 401
+                ? "비밀번호가 맞지 않습니다."
+                : "시도가 너무 많습니다. 잠시 후 다시 해주세요.").getBytes("UTF-8");
+        out.write(("HTTP/1.1 " + code + " " + reason + "\r\n"
+                + "Content-Type: text/plain; charset=utf-8\r\n"
+                + "Content-Length: " + body.length + "\r\n"
+                + "Connection: close\r\n\r\n").getBytes("UTF-8"));
+        out.write(body);
+    }
+
+    /**
+     * `/stream?t=1730-0&pw=8317` 에서 값 하나를 꺼낸다. 없으면 빈 문자열.
+     *
+     * 재생 페이지가 캐시를 피하려고 `t=` 를 이미 붙이고 있어서, 경로를 통째로
+     * 비교하던 예전 방식으로는 `pw` 를 읽을 수 없다.
+     */
+    private static String param(String path, String key) {
+        int q = path.indexOf('?');
+        if (q < 0) return "";
+        for (String kv : path.substring(q + 1).split("&")) {
+            int eq = kv.indexOf('=');
+            if (eq > 0 && kv.substring(0, eq).equals(key)) {
+                try {
+                    return java.net.URLDecoder.decode(kv.substring(eq + 1), "UTF-8");
+                } catch (Exception e) {
+                    return "";
+                }
+            }
+        }
+        return "";
+    }
+
     private String page() {
         return "<!doctype html><html lang=ko><head>"
                 + "<meta charset=utf-8>"
@@ -686,29 +895,54 @@ public class CaptureService extends Service {
                 + "system-ui,sans-serif;background:#111;color:#eee}"
                 + "button{font-size:22px;padding:22px 52px;border:0;border-radius:999px;"
                 + "background:#fff;color:#111;font-weight:600}"
-                + "#s{font-size:15px;color:#888;min-height:22px}</style></head><body>"
+                // 4자리를 또박또박 보여준다. 자간을 주면 가운데 정렬이 오른쪽으로
+                // 밀리므로 같은 값만큼 들여쓰기로 되돌린다.
+                + "#p{font-size:27px;text-align:center;letter-spacing:12px;text-indent:12px;"
+                + "width:190px;padding:15px 0;border:1px solid #333;border-radius:14px;"
+                + "background:#1a1a1a;color:#eee}"
+                + "#s{font-size:15px;color:#888;min-height:22px;text-align:center;padding:0 24px}"
+                + "</style></head><body>"
                 + "<div style='font-size:19px'>🎧 같이 듣기</div>"
-                + "<button id=b>재생</button><div id=s>버튼을 눌러주세요</div>"
+                + "<input id=p type=tel inputmode=numeric maxlength=4 placeholder='0000'>"
+                + "<button id=b>재생</button>"
+                + "<div id=s>호스트가 알려준 4자리를 입력하세요</div>"
                 + "<audio id=a playsinline></audio>"
                 + "<script>"
                 + "var a=document.getElementById('a'),b=document.getElementById('b'),"
-                + "s=document.getElementById('s');"
+                + "s=document.getElementById('s'),p=document.getElementById('p');"
                 // want: 사용자가 '듣겠다'고 한 상태. 끊겨도 이게 true 면 계속 재시도한다.
-                + "var want=false,tries=0,lastT=-1,lastAt=0,timer=null;"
+                + "var want=false,tries=0,lastT=-1,lastAt=0,timer=null,pw='';"
                 + "var OK='재생 중 — 화면을 꺼도 계속 들립니다';"
                 + "function connect(){"
                 + "s.textContent=tries?('재접속 중… ('+tries+'회)'):'연결 중…';"
-                + "a.src='/stream?t='+Date.now()+'-'+tries;"
+                + "a.src='/stream?pw='+encodeURIComponent(pw)+'&t='+Date.now()+'-'+tries;"
                 + "lastT=-1;lastAt=Date.now();"
                 + "a.play().then(function(){tries=0;s.textContent=OK;b.textContent='재생 중';"
                 + "if('mediaSession' in navigator){navigator.mediaSession.metadata="
                 + "new MediaMetadata({title:'같이 듣기',artist:'호스트의 소리'});}"
-                + "}).catch(function(e){s.textContent='재생 실패: '+e.name;retry();});}"
+                + "}).catch(function(e){fail('재생 실패: '+e.name);});}"
+                // 왜 끊겼는지 서버에 따로 물어본다. <audio> 는 실패해도 상태 코드를
+                // 안 주기 때문에, 이게 없으면 비밀번호가 틀린 건지 Wi-Fi 가 끊긴 건지
+                // 구분을 못 하고 영원히 '재접속 중…' 만 띄운다.
+                + "function fail(msg){if(!want)return;"
+                + "fetch('/check?pw='+encodeURIComponent(pw)).then(function(r){"
+                + "if(r.status===204){s.textContent=msg;retry();return;}"
+                + "want=false;b.textContent='재생';p.disabled=false;"
+                + "s.textContent=r.status===429?'시도가 너무 많습니다 — 잠시 후 다시':"
+                + "'비밀번호가 맞지 않습니다';"
+                + "}).catch(function(){s.textContent=msg;retry();});}"
                 // 지수적으로는 안 늘리고 최대 5초에서 멈춘다. 여행 중 재접속은 빠를수록 좋다.
                 + "function retry(){if(!want||timer)return;tries++;"
                 + "timer=setTimeout(function(){timer=null;connect();},Math.min(1000*tries,5000));}"
-                + "b.onclick=function(){if(want)return;want=true;tries=0;connect();};"
-                + "a.onerror=function(){if(want){s.textContent='스트림 끊김 — 재접속';retry();}};"
+                // ★비밀번호를 서버에 먼저 물어보고 나서 재생하면 안 된다. fetch 를 기다리는
+                //   사이 사용자 제스처가 풀려서 아이폰이 play() 를 거부한다. 그래서 일단
+                //   재생을 걸고, 실패했을 때만 fail() 이 이유를 따져 묻는다.
+                + "b.onclick=function(){if(want)return;"
+                + "var v=(p.value||'').replace(/\\D/g,'');"
+                + "if(v.length!==4){s.textContent='비밀번호 4자리를 입력해 주세요';return;}"
+                + "pw=v;want=true;tries=0;p.disabled=true;connect();};"
+                + "p.onkeydown=function(e){if(e.key==='Enter')b.click();};"
+                + "a.onerror=function(){if(want)fail('스트림 끊김 — 재접속');};"
                 + "a.onended=function(){if(want)retry();};"
                 + "a.onstalled=function(){if(want)s.textContent='버퍼링…';};"
                 + "a.onplaying=function(){tries=0;s.textContent=OK;};"
@@ -746,6 +980,14 @@ public class CaptureService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        sharing = false;
+        listeners = 0;
+        // 방을 닫으면 비밀번호도 같이 버린다. 다음 공유는 새 번호로 시작한다 —
+        // 한 번 불러준 번호가 계속 살아 있으면 그게 곧 영구 열쇠가 된다.
+        roomId = "";
+        roomName = "";
+        roomPw = "";
+        pwFails.clear();
         try { if (server != null) server.close(); } catch (Exception ignored) { }
         for (Client c : clients) c.close();
         clients.clear();

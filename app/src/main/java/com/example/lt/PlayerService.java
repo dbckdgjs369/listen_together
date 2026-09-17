@@ -29,6 +29,7 @@ public class PlayerService extends Service {
 
     public static final String TAG = CaptureService.TAG;
     public static final String EXTRA_HOST = "host";
+    public static final String EXTRA_PW = "pw";
     private static final String CHANNEL_ID = "lt_player";
 
     /**
@@ -52,10 +53,26 @@ public class PlayerService extends Service {
     public static volatile String currentHost;
     /** 청취 상태 한 줄. 화면이 그대로 띄운다. */
     public static volatile String stateText = "";
+    /**
+     * 호스트가 입장을 거절했는가(비밀번호 불일치·시도 초과).
+     *
+     * 이게 없으면 화면이 "192.168.0.2 에 참여 중 / 비밀번호가 맞지 않습니다" 라고
+     * 동시에 말한다. 붙은 줄 알고 소리가 왜 안 나는지 찾게 되는 자리라,
+     * **재시도 중인 실패**와 **끝난 실패**를 화면이 구분할 수 있어야 한다.
+     */
+    public static volatile boolean denied;
 
     private volatile boolean running;
     /** 접속 대상. 루프가 매 회차 다시 읽으므로 도중에 갈아끼울 수 있다. */
     private volatile String host;
+    /**
+     * 입장 비밀번호. **매 접속마다 다시 보낸다.**
+     *
+     * 호스트가 토큰을 발급하고 우리가 그걸 보관하는 방식도 되지만, 재접속이 잦은
+     * 물건이라 그래봐야 "값 하나를 계속 다시 보낸다"는 건 똑같다. 비밀번호를
+     * 그대로 들고 있는 쪽이 상태가 하나 적고 틀릴 자리도 적다.
+     */
+    private volatile String pw = "";
     private Socket sock;
     private AudioTrack track;
     /** 지금 track 이 물고 있는 샘플레이트. 호스트가 바뀌면 track 을 다시 만든다. */
@@ -76,13 +93,21 @@ public class PlayerService extends Service {
             return START_NOT_STICKY;
         }
 
+        String wantPw = intent != null && intent.getStringExtra(EXTRA_PW) != null
+                ? intent.getStringExtra(EXTRA_PW) : "";
+
         if (running) {
             // 예전엔 여기서 그냥 무시했다. 그래서 한 번 잘못된 주소로 시작하면
             // 그 뒤로 뭘 눌러도 먹히지 않았다 — 자동 발견 목록을 탭해도, 주소를
             // 다시 입력해도. 실패한 주소를 붙잡은 서비스가 영원히 우선했다.
-            if (want.equals(host)) return START_NOT_STICKY;
-            Log.i(TAG, "player 호스트 교체: " + host + " → " + want);
+            //
+            // 비밀번호가 생기면서 조건이 하나 늘었다. 같은 주소라도 **비밀번호가
+            // 달라졌으면 다시 붙어야 한다** — 틀리게 입력한 사람이 고쳐 넣는 경우다.
+            if (want.equals(host) && wantPw.equals(pw)) return START_NOT_STICKY;
+            Log.i(TAG, "player 대상 교체: " + host + " → " + want);
             host = want;
+            pw = wantPw;
+            denied = false;
             setState("연결 중…");
             startForegroundCompat(want);
             closeSock();     // 읽기를 끊어 루프가 새 주소로 다시 붙게 한다
@@ -90,10 +115,14 @@ public class PlayerService extends Service {
         }
 
         host = want;
+        pw = wantPw;
+        denied = false;
+        // setState 가 running 을 보고 무시하므로, 첫 상태를 쓰기 전에 세워야 한다.
+        // 순서가 뒤집히면 "연결 중…" 이 통째로 삼켜져 화면이 빈 채로 시작한다.
+        running = true;
         setState("연결 중…");
         startForegroundCompat(want);
         acquireLocks();
-        running = true;
         new Thread(new Runnable() {
             @Override public void run() { playLoop(); }
         }, "lt-player").start();
@@ -119,8 +148,16 @@ public class PlayerService extends Service {
         return s.isEmpty() ? null : s;
     }
 
-    /** 상태를 한 곳에서만 바꾼다. 화면은 이 두 값만 읽는다. */
+    /**
+     * 상태를 한 곳에서만 바꾼다. 화면은 이 두 값만 읽는다.
+     *
+     * **죽은 뒤에는 아무것도 쓰지 않는다.** onDestroy 가 currentHost 를 비워도,
+     * 재생 스레드는 소켓이 끊기며 예외를 맞고 마지막으로 setState 를 한 번 더 부른다.
+     * 그러면 여기서 currentHost 가 되살아나 — 나가기를 눌렀는데도 화면은 계속
+     * "참여 중" 이라고 우겼다. 실제로 그랬다.
+     */
     private void setState(String s) {
+        if (!running) return;
         stateText = s;
         currentHost = host;
     }
@@ -156,6 +193,10 @@ public class PlayerService extends Service {
 
     /** 참여자도 화면을 끈 채 몇 시간을 듣는다. 호스트와 같은 이유로 CPU·Wi-Fi 를 잠근다. */
     private void acquireLocks() {
+        // 비밀번호를 틀리면 루프만 멈추고 서비스는 살아 있다(이유를 화면에 남겨야 하므로).
+        // 고쳐 입력하면 여기가 **두 번째로** 불린다 — 먼저 놓지 않으면 이전 잠금 객체가
+        // 잡힌 채로 참조를 잃는다. 화면 끈 채 몇 시간 도는 물건이라 그냥 둘 수 없다.
+        releaseLocks();
         try {
             PowerManager pm = getSystemService(PowerManager.class);
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "lt:player");
@@ -192,12 +233,25 @@ public class PlayerService extends Service {
                 sock.connect(new InetSocketAddress(host, CaptureService.PORT), 4000);
                 sock.setTcpNoDelay(true);
                 sock.getOutputStream().write(
-                        ("GET /stream HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n")
+                        ("GET /stream?pw=" + java.net.URLEncoder.encode(pw, "UTF-8")
+                                + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n")
                                 .getBytes("UTF-8"));
                 sock.getOutputStream().flush();
 
                 InputStream in = sock.getInputStream();
-                skipHeaders(in);
+                int status = readHead(in);
+                if (status == 401 || status == 429) {
+                    // 재시도해도 결과가 같다. 계속 붙으면 호스트의 실패 카운터만 올려서
+                    // 스스로를 차단시킨다 — 여기서 멈추고 이유를 화면에 남긴다.
+                    denied = true;
+                    setState(status == 401
+                            ? "비밀번호가 맞지 않습니다"
+                            : "시도가 너무 많습니다 — 잠시 후 다시");
+                    Log.w(TAG, "입장 거부: status=" + status);
+                    closeSock();
+                    running = false;
+                    break;
+                }
 
                 // WAV 헤더를 버리지 않고 읽어서 **호스트가 실제로 보내는 샘플레이트**를
                 // 쓴다. 44100 을 박아두면 호스트만 48000 으로 올렸을 때 소리가 느려지고,
@@ -354,15 +408,35 @@ public class PlayerService extends Service {
                 | (b[off + 2] & 0xFF) << 16 | (b[off + 3] & 0xFF) << 24;
     }
 
-    /** 응답 헤더 끝(\r\n\r\n)까지 한 바이트씩 넘긴다. */
-    private void skipHeaders(InputStream in) throws Exception {
+    /**
+     * 응답 헤더 끝(\r\n\r\n)까지 읽고 **상태 코드를 돌려준다.**
+     *
+     * 예전엔 전부 버렸다(skipHeaders). 비밀번호가 생기면서 "왜 못 들어갔는지"가
+     * 중요해졌다 — 401 을 못 읽으면 틀린 비밀번호로 1초마다 영원히 재시도하면서
+     * 화면엔 '연결 실패 — 재시도 중' 만 뜬다. 사용자는 Wi-Fi 문제인 줄 안다.
+     *
+     * 못 읽으면 0 을 돌려주고, 호출부는 예전처럼 그냥 진행한다. 상태 줄을 파싱
+     * 못 했다고 재생을 막을 이유는 없다.
+     */
+    private int readHead(InputStream in) throws Exception {
+        StringBuilder head = new StringBuilder();
         int state = 0;
         while (state < 4) {
             int c = in.read();
             if (c < 0) throw new Exception("stream closed in headers");
+            // 상태 줄만 있으면 된다. 헤더가 아무리 길어도 메모리를 안 늘린다.
+            if (head.length() < 64) head.append((char) c);
             if ((state == 0 || state == 2) && c == '\r') state++;
             else if ((state == 1 || state == 3) && c == '\n') state++;
             else state = 0;
+        }
+        // "HTTP/1.1 401 Unauthorized" → 가운데 토큰
+        String[] parts = head.toString().split("\\s+");
+        if (parts.length < 2) return 0;
+        try {
+            return Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 
@@ -385,6 +459,7 @@ public class PlayerService extends Service {
         running = false;
         currentHost = null;
         stateText = "";
+        denied = false;
         closeSock();
         if (track != null) { try { track.stop(); track.release(); } catch (Exception ignored) { } }
         releaseLocks();
