@@ -1,6 +1,6 @@
 {
-  "name": "같이 듣기",
-  "short_name": "같이 듣기",
+  "name": "이음",
+  "short_name": "이음",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

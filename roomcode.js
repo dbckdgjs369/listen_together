@@ -16,12 +16,6 @@
   var END = BANY + 4294967296;
   var PORT = 7980;
 
-  function check(digits) {
-    var sum = 0;
-    for (var i = 0; i < digits.length; i++) sum += (i + 1) * ALPHA.indexOf(digits[i]);
-    return sum % 31;
-  }
-
   /** 사람이 친 그대로를 받아준다. 소문자·공백·하이픈, O/I/L 혼동까지. */
   function normalize(raw) {
     return String(raw || '')
@@ -47,19 +41,16 @@
   }
 
   /**
-   * 코드 → { ip, pw, url }. 틀린 코드면 null.
-   * 검사 글자가 안 맞으면 풀지 않는다 — 오타 하나로 없는 주소에 보내면
-   * 참여자는 "사이트에 연결할 수 없음" 만 보고 이유를 모른다.
+   * 코드 → { ip, pw, url }. 못 읽는 글자가 있으면 null.
+   * 검사 글자가 없어서 오타가 나도 대개 어딘가로 풀린다(RoomCode.java 주석 참고).
    */
   function decode(raw) {
     var s = normalize(raw);
-    if (s.length < 2 || s.length > 12) return null;
+    if (s.length < 1 || s.length > 11) return null;
     for (var i = 0; i < s.length; i++) if (ALPHA.indexOf(s[i]) < 0) return null;
-    var body = s.slice(0, -1);
-    if (ALPHA[check(body)] !== s[s.length - 1]) return null;
 
     var value = 0;
-    for (var j = 0; j < body.length; j++) value = value * 32 + ALPHA.indexOf(body[j]);
+    for (var j = 0; j < s.length; j++) value = value * 32 + ALPHA.indexOf(s[j]);
     var idx = Math.floor(value / 10000);
     if (idx >= END) return null;
     var pw = ('000' + (value % 10000)).slice(-4);
@@ -83,7 +74,7 @@
       out = ALPHA[value % 32] + out;
       value = Math.floor(value / 32);
     } while (value > 0);
-    return out + ALPHA[check(out)];
+    return out;
   }
 
   var api = { decode: decode, encode: encode, normalize: normalize };
