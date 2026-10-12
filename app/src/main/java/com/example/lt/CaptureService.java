@@ -69,6 +69,11 @@ public class CaptureService extends Service {
     private static final int MAX_ROOM_NAME = 20;
     /** 비밀번호를 이 횟수만큼 틀린 주소는 방이 끝날 때까지 받지 않는다. */
     private static final int PW_MAX_FAILS = 10;
+    /**
+     * 이보다 작은, 끝이 정해진 Range 요청은 "떠보기"로 보고 딱 그만큼만 준다.
+     * 사파리의 첫 요청이 `bytes=0-1` 이다. 그 이상은 스트림으로 취급한다.
+     */
+    private static final long PROBE_MAX = 64 * 1024;
 
     /**
      * 기기 네이티브 샘플레이트에 맞춘다. 요즘 안드로이드 기기는 거의 다 48000 이다.
@@ -108,6 +113,19 @@ public class CaptureService extends Service {
     private AudioTrack keepAlive;
     private ServerSocket server;
     private volatile boolean running;
+
+    /**
+     * 공유를 끈 뒤에도 서버를 이만큼은 남겨 두고 모든 요청에 410 으로 답한다.
+     *
+     * 서버를 바로 닫으면 웹 청취자는 "호스트가 끝냈다"와 "내 Wi-Fi 가 잠깐 끊겼다"를
+     * 구분하지 못한다 — 둘 다 그냥 연결 실패라서 영원히 재접속만 한다. 410 은 서버가
+     * 직접 한 대답이라 네트워크 끊김일 수가 없다. 끊긴 스트림을 본 페이지는 곧바로
+     * /check 를 물어보므로 몇 초면 충분하다.
+     */
+    private static final long FAREWELL_MS = 5000;
+    /** 작별 인사 중인 서버. 그 사이 공유를 다시 켜면 포트를 넘겨받으려고 먼저 닫는다. */
+    private static volatile ServerSocket lingering;
+    private volatile long farewellUntil;
 
     /**
      * 공유 중인가. 화면이 버튼 라벨("공유 시작"/"공유 중지")을 정하는 데 쓴다.
@@ -363,13 +381,17 @@ public class CaptureService extends Service {
         // 비밀번호를 알림에 싣는다. 친구한테 불러주려고 매번 앱을 열게 하지 않는다 —
         // 화면을 끄고 주머니에 넣은 뒤에 늦게 합류하는 사람이 생기는 게 흔한 경우다.
         String pwLine = roomPw.isEmpty() ? "" : "비밀번호 " + roomPw + "\n";
+        // 맥·PC 용. 코드 하나에 주소와 비밀번호가 다 들어 있다.
+        String code = RoomCode.encode(MainActivity.localIp(), roomPw);
+        String codeLine = code == null ? "" : "방 코드 " + code + "  (" + RoomCode.SITE + ")\n";
 
         Notification n = new Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("같이듣기 — " + roomName)
+                .setContentTitle("이음 — " + roomName)
                 .setContentText(roomPw.isEmpty() ? "http://" + MainActivity.localIp() + ":" + PORT
                         : "비밀번호 " + roomPw + " · " + MainActivity.localIp())
                 .setStyle(new Notification.BigTextStyle().bigText(
-                        pwLine + (ips.size() > 1 ? "되는 것으로 하나 골라 접속:\n" + all : all.toString())))
+                        pwLine + codeLine
+                                + (ips.size() > 1 ? "되는 것으로 하나 골라 접속:\n" + all : all.toString())))
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentIntent(openPi)
                 .addAction(new Notification.Action.Builder(null, "공유 중지", pi).build())
@@ -591,7 +613,7 @@ public class CaptureService extends Service {
 
             long now = System.nanoTime();
             // 한 바퀴가 목표(0.1초)를 넘겼으면 그대로 보고한다 — 넘긴 만큼 부스트를 요청하는 셈이다.
-            if (hint != null) {
+            if (hint != null && Build.VERSION.SDK_INT >= 31) {
                 try { hint.reportActualWorkDuration(Math.max(1, now - iterStart)); }
                 catch (Exception ignored) { }
             }
@@ -643,9 +665,13 @@ public class CaptureService extends Service {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    server = new ServerSocket(PORT);
+                    ServerSocket old = lingering;
+                    if (old != null) { lingering = null; try { old.close(); } catch (Exception ignored) { } }
+                    server = new ServerSocket();
+                    server.setReuseAddress(true);
+                    server.bind(new java.net.InetSocketAddress(PORT));
                     Log.i(TAG, "http server on " + MainActivity.localIp() + ":" + PORT);
-                    while (running) {
+                    while (running || System.currentTimeMillis() < farewellUntil) {
                         final Socket s = server.accept();
                         // 받는 스레드에서 직접 처리하면 안 된다. handleClient 는 요청을
                         // 읽으려고 블로킹하는데, 브라우저는 주소창에 입력하는 순간
@@ -739,6 +765,19 @@ public class CaptureService extends Service {
             OutputStream out = s.getOutputStream();
             String peer = String.valueOf(s.getInetAddress().getHostAddress());
 
+            // 공유를 끈 뒤 작별 인사 중. 비밀번호도 이미 버렸으니 무엇을 물어도 '끝났다'.
+            if (!running) {
+                byte[] body = "호스트가 공유를 종료했어요.".getBytes("UTF-8");
+                out.write(("HTTP/1.1 410 Gone\r\n"
+                        + "Content-Type: text/plain; charset=utf-8\r\n"
+                        + "Content-Length: " + body.length + "\r\n"
+                        + "Connection: close\r\n\r\n").getBytes("UTF-8"));
+                out.write(body);
+                out.flush();
+                s.close();
+                return;
+            }
+
             // 비밀번호만 확인하고 끊는 창구. 브라우저 전용이다.
             //
             // <audio> 는 실패해도 **HTTP 상태 코드를 안 알려준다.** 그래서 페이지가
@@ -783,18 +822,57 @@ public class CaptureService extends Service {
             // 성향이 강하다. 끝이 없는 스트림이라 진짜 길이는 없지만, 아주 큰 값을
             // 총 길이로 적어주면 "받다 만 파일"로 취급해 계속 재생한다.
             // iOS 판 서버(ios/LTBroadcast/Server.swift)에 먼저 넣었던 처리를 옮겨온 것.
-            boolean hasRange = req.toLowerCase(java.util.Locale.US).contains("\r\nrange:");
+            //
+            // ★요청한 범위를 **그대로** 돌려줘야 한다. 사파리는 본 요청 전에
+            //   `bytes=0-1` 로 2바이트만 떠보는데, 거기에 `0-(huge-1)` 을 끝없이
+            //   흘려보내면 응답이 요청과 안 맞아 <audio> 가 에러를 낸다.
+            //   그래서 끝이 정해진 작은 요청은 "WAV 헤더 + 무음" 으로 된 가상 파일에서
+            //   정확히 그만큼 잘라주고 끊는다. 청취자로 세지 않는다.
             long huge = 0x7FFFFFFFFFFFL;
+            long[] range = parseRange(req);          // null = Range 없음
+            byte[] wav = wavHeader();
+            long start = range == null ? 0 : Math.min(range[0], huge - 1);
+            long end = range == null ? -1 : range[1];
+
+            if (range != null && end >= start && end - start < PROBE_MAX) {
+                int len = (int) (end - start + 1);
+                byte[] body = new byte[len];         // 헤더 뒤는 0 = 무음
+                for (int i = 0; i < len && start + i < wav.length; i++) {
+                    body[i] = wav[(int) (start + i)];
+                }
+                out.write(("HTTP/1.1 206 Partial Content\r\n"
+                        + "Content-Range: bytes " + start + "-" + end + "/" + huge + "\r\n"
+                        + "Content-Length: " + len + "\r\n"
+                        + "Content-Type: audio/wav\r\n"
+                        + "Accept-Ranges: bytes\r\n"
+                        + "Cache-Control: no-cache\r\n"
+                        + "Connection: close\r\n\r\n").getBytes("UTF-8"));
+                out.write(body);
+                out.flush();
+                s.close();
+                Log.i(TAG, "range probe " + peer + " bytes=" + start + "-" + end);
+                return;
+            }
+
+            boolean hasRange = range != null;
             String headers = (hasRange
                     ? "HTTP/1.1 206 Partial Content\r\n"
-                      + "Content-Range: bytes 0-" + (huge - 1) + "/" + huge + "\r\n"
+                      + "Content-Range: bytes " + start + "-" + (huge - 1) + "/" + huge + "\r\n"
                     : "HTTP/1.1 200 OK\r\n")
                     + "Content-Type: audio/wav\r\n"
                     + "Accept-Ranges: bytes\r\n"
                     + "Cache-Control: no-cache\r\n"
                     + "Connection: close\r\n\r\n";
             out.write(headers.getBytes("UTF-8"));
-            out.write(wavHeader());
+            if (start < wav.length) {
+                out.write(wav, (int) start, wav.length - (int) start);
+            } else {
+                // 헤더 뒤 중간부터 달라고 하면 헤더는 빼고 PCM 만 보낸다. 받는 쪽은
+                // 오프셋으로 프레임 경계를 계산하므로, 경계가 맞게 0 을 채워 맞춘다.
+                int frame = CHANNELS * BITS / 8;
+                int pad = (int) ((frame - (start - wav.length) % frame) % frame);
+                if (pad > 0) out.write(new byte[pad]);
+            }
             out.flush();
             clients.add(new Client(s, out));
             listeners = clients.size();
@@ -864,6 +942,33 @@ public class CaptureService extends Service {
     }
 
     /**
+     * `Range: bytes=시작-끝` 을 {시작, 끝} 으로. 끝이 없으면 -1, Range 가 없거나
+     * 못 읽으면 null. `bytes=-500` 같은 끝에서부터 요청은 끝이 없는 스트림이라
+     * 의미가 없으므로 처음부터로 본다.
+     */
+    private static long[] parseRange(String req) {
+        for (String line : req.split("\r\n")) {
+            int c = line.indexOf(':');
+            if (c < 0 || !line.substring(0, c).trim().equalsIgnoreCase("range")) continue;
+            String v = line.substring(c + 1).trim().toLowerCase(java.util.Locale.US);
+            if (!v.startsWith("bytes=")) return null;
+            v = v.substring(6);
+            int comma = v.indexOf(',');
+            if (comma >= 0) v = v.substring(0, comma);   // 여러 구간은 첫 구간만
+            int dash = v.indexOf('-');
+            if (dash < 0) return null;
+            try {
+                String a = v.substring(0, dash).trim(), b = v.substring(dash + 1).trim();
+                if (a.isEmpty()) return new long[]{0, -1};
+                return new long[]{Long.parseLong(a), b.isEmpty() ? -1 : Long.parseLong(b)};
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
      * `/stream?t=1730-0&pw=8317` 에서 값 하나를 꺼낸다. 없으면 빈 문자열.
      *
      * 재생 페이지가 캐시를 피하려고 `t=` 를 이미 붙이고 있어서, 경로를 통째로
@@ -885,77 +990,266 @@ public class CaptureService extends Service {
         return "";
     }
 
-    private String page() {
-        return "<!doctype html><html lang=ko><head>"
-                + "<meta charset=utf-8>"
-                + "<meta name=viewport content='width=device-width,initial-scale=1'>"
-                + "<title>같이 듣기</title><style>"
-                + "body{margin:0;height:100vh;display:flex;flex-direction:column;"
-                + "align-items:center;justify-content:center;gap:24px;font-family:-apple-system,"
-                + "system-ui,sans-serif;background:#111;color:#eee}"
-                + "button{font-size:22px;padding:22px 52px;border:0;border-radius:999px;"
-                + "background:#fff;color:#111;font-weight:600}"
-                // 4자리를 또박또박 보여준다. 자간을 주면 가운데 정렬이 오른쪽으로
-                // 밀리므로 같은 값만큼 들여쓰기로 되돌린다.
-                + "#p{font-size:27px;text-align:center;letter-spacing:12px;text-indent:12px;"
-                + "width:190px;padding:15px 0;border:1px solid #333;border-radius:14px;"
-                + "background:#1a1a1a;color:#eee}"
-                + "#s{font-size:15px;color:#888;min-height:22px;text-align:center;padding:0 24px}"
-                + "</style></head><body>"
-                + "<div style='font-size:19px'>🎧 같이 듣기</div>"
-                + "<input id=p type=tel inputmode=numeric maxlength=4 placeholder='0000'>"
-                + "<button id=b>재생</button>"
-                + "<div id=s>호스트가 알려준 4자리를 입력하세요</div>"
-                + "<audio id=a playsinline></audio>"
-                + "<script>"
-                + "var a=document.getElementById('a'),b=document.getElementById('b'),"
-                + "s=document.getElementById('s'),p=document.getElementById('p');"
-                // want: 사용자가 '듣겠다'고 한 상태. 끊겨도 이게 true 면 계속 재시도한다.
-                + "var want=false,tries=0,lastT=-1,lastAt=0,timer=null,pw='';"
-                + "var OK='재생 중 — 화면을 꺼도 계속 들립니다';"
-                + "function connect(){"
-                + "s.textContent=tries?('재접속 중… ('+tries+'회)'):'연결 중…';"
-                + "a.src='/stream?pw='+encodeURIComponent(pw)+'&t='+Date.now()+'-'+tries;"
-                + "lastT=-1;lastAt=Date.now();"
-                + "a.play().then(function(){tries=0;s.textContent=OK;b.textContent='재생 중';"
-                + "if('mediaSession' in navigator){navigator.mediaSession.metadata="
-                + "new MediaMetadata({title:'같이 듣기',artist:'호스트의 소리'});}"
-                + "}).catch(function(e){fail('재생 실패: '+e.name);});}"
-                // 왜 끊겼는지 서버에 따로 물어본다. <audio> 는 실패해도 상태 코드를
-                // 안 주기 때문에, 이게 없으면 비밀번호가 틀린 건지 Wi-Fi 가 끊긴 건지
-                // 구분을 못 하고 영원히 '재접속 중…' 만 띄운다.
-                + "function fail(msg){if(!want)return;"
-                + "fetch('/check?pw='+encodeURIComponent(pw)).then(function(r){"
-                + "if(r.status===204){s.textContent=msg;retry();return;}"
-                + "want=false;b.textContent='재생';p.disabled=false;"
-                + "s.textContent=r.status===429?'시도가 너무 많습니다 — 잠시 후 다시':"
-                + "'비밀번호가 맞지 않습니다';"
-                + "}).catch(function(){s.textContent=msg;retry();});}"
-                // 지수적으로는 안 늘리고 최대 5초에서 멈춘다. 여행 중 재접속은 빠를수록 좋다.
-                + "function retry(){if(!want||timer)return;tries++;"
-                + "timer=setTimeout(function(){timer=null;connect();},Math.min(1000*tries,5000));}"
-                // ★비밀번호를 서버에 먼저 물어보고 나서 재생하면 안 된다. fetch 를 기다리는
-                //   사이 사용자 제스처가 풀려서 아이폰이 play() 를 거부한다. 그래서 일단
-                //   재생을 걸고, 실패했을 때만 fail() 이 이유를 따져 묻는다.
-                + "b.onclick=function(){if(want)return;"
-                + "var v=(p.value||'').replace(/\\D/g,'');"
-                + "if(v.length!==4){s.textContent='비밀번호 4자리를 입력해 주세요';return;}"
-                + "pw=v;want=true;tries=0;p.disabled=true;connect();};"
-                + "p.onkeydown=function(e){if(e.key==='Enter')b.click();};"
-                + "a.onerror=function(){if(want)fail('스트림 끊김 — 재접속');};"
-                + "a.onended=function(){if(want)retry();};"
-                + "a.onstalled=function(){if(want)s.textContent='버퍼링…';};"
-                + "a.onplaying=function(){tries=0;s.textContent=OK;};"
-                // 감시견: 이벤트가 아예 안 뜬 채 재생만 멈추는 경우(가장 흔한 실패)를 잡는다.
-                // currentTime 이 4초간 안 늘면 죽은 것으로 보고 다시 붙는다.
-                + "setInterval(function(){if(!want||timer)return;var now=Date.now();"
-                + "if(a.currentTime!==lastT){lastT=a.currentTime;lastAt=now;return;}"
-                + "if(now-lastAt>4000){s.textContent='멈춤 감지 — 재접속';retry();}},1000);"
-                // 화면을 다시 켰을 때 즉시 복구를 시도한다.
-                + "document.addEventListener('visibilitychange',function(){"
-                + "if(!document.hidden&&want&&a.paused){tries=0;connect();}});"
-                + "</script></body></html>";
+    /** 방 이름은 호스트가 적은 글이라 그대로 HTML 에 넣으면 태그가 먹는다. */
+    private static String html(String t) {
+        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace("\"", "&quot;").replace("'", "&#39;");
     }
+
+    /**
+     * 브라우저 참여자용 재생 페이지. 앱 '듣는 중' 화면과 같은 색·모양으로 맞춘다.
+     *
+     * 호스트 핫스팟에만 붙은 기기는 인터넷이 없으므로 글꼴·스크립트를 밖에서 받지 않는다.
+     * 전부 이 문자열 하나에 들어 있어야 한다.
+     */
+    private String page() {
+        return PAGE.replace("%ROOM%", html(roomName.isEmpty() ? "이음" : roomName));
+    }
+
+    private static final String PAGE = """
+<!doctype html><html lang=ko><head>
+<meta charset=utf-8>
+<meta name=viewport content='width=device-width,initial-scale=1,viewport-fit=cover'>
+<meta name=theme-color content='#07080C'>
+<title>이음</title><style>
+:root{--bg:#07080C;--surface:#171A22;--stroke:rgba(255,255,255,.08);--text:#F2F4F8;--dim:#9AA3B6;--faint:#5B6376;
+--accent:#6C5CE7;--lav:#B7ACFF;--live:#3DDC97;--danger:#FF7A7A}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;
+-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;overflow-x:hidden;
+padding:env(safe-area-inset-top) 22px calc(24px + env(safe-area-inset-bottom))}
+/* 천천히 흐르는 오로라. 흐림 필터 대신 방사형 그라데이션이라 폰에서도 가볍다 */
+.aura{position:fixed;inset:0;z-index:-2;overflow:hidden;background:radial-gradient(120% 70% at 50% -10%,#16163A 0%,var(--bg) 62%)}
+.aura i{position:absolute;border-radius:50%;will-change:transform}
+.aura .a1{width:90vmax;height:90vmax;left:-40vmax;top:-35vmax;background:radial-gradient(circle,rgba(108,92,231,.55),transparent 62%);animation:d1 19s ease-in-out infinite alternate}
+.aura .a2{width:80vmax;height:80vmax;right:-45vmax;top:20vh;background:radial-gradient(circle,rgba(45,108,223,.38),transparent 62%);animation:d2 23s ease-in-out infinite alternate}
+.aura .a3{width:70vmax;height:70vmax;left:-10vmax;bottom:-45vmax;background:radial-gradient(circle,rgba(61,220,151,.22),transparent 62%);animation:d3 27s ease-in-out infinite alternate}
+@keyframes d1{to{transform:translate(18vw,12vh) scale(1.15)}}
+@keyframes d2{to{transform:translate(-16vw,-8vh) scale(1.1)}}
+@keyframes d3{to{transform:translate(14vw,-10vh) scale(1.2)}}
+/* 필름 입자. 매끈한 그라데이션에 종이 같은 질감을 준다 */
+.grain{position:fixed;inset:-50%;z-index:-1;pointer-events:none;opacity:.08;
+background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.top{height:60px;display:flex;align-items:center;flex:none}
+.brand{font-size:21px;font-weight:700;letter-spacing:-.02em;display:flex;align-items:center}
+/* 音 은 도장처럼 — 이름의 두 번째 뜻을 낙관 찍듯 곁들인다 */
+.seal{display:inline-grid;place-items:center;width:22px;height:22px;margin-left:8px;border-radius:6px;
+border:1.5px solid rgba(183,172,255,.75);color:var(--lav);font-size:12px;font-weight:700;transform:rotate(-6deg)}
+main{flex:1;width:100%;max-width:380px;margin:0 auto;display:flex;flex-direction:column;justify-content:center}
+main>*{animation:rise .8s cubic-bezier(.2,.8,.2,1) both}
+main>*:nth-child(2){animation-delay:.08s}main>*:nth-child(3){animation-delay:.16s}
+main>*:nth-child(4){animation-delay:.24s}main>*:nth-child(5){animation-delay:.32s}main>*:nth-child(6){animation-delay:.4s}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}}
+.eyebrow{font-size:12.5px;font-weight:600;letter-spacing:.24em;color:var(--lav);opacity:.85}
+.glass{background:rgba(23,26,40,.52);-webkit-backdrop-filter:blur(22px) saturate(140%);backdrop-filter:blur(22px) saturate(140%);
+border:1px solid var(--stroke);border-radius:26px;box-shadow:0 20px 50px -20px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.05)}
+.btn{position:relative;overflow:hidden;width:100%;height:56px;border-radius:18px;border:0;font:inherit;font-size:16px;font-weight:700;
+letter-spacing:.02em;color:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;
+background:linear-gradient(135deg,#8C7EF7 0%,#6C5CE7 45%,#4636B8 100%);
+box-shadow:0 12px 30px -10px rgba(108,92,231,.85),inset 0 1px 0 rgba(255,255,255,.28);transition:transform .15s,filter .15s}
+.btn:active{transform:scale(.98);filter:brightness(.92)}
+/* 가끔 한 번씩 빛이 스치고 지나간다 */
+.btn:after{content:'';position:absolute;top:0;bottom:0;width:40%;left:-60%;
+background:linear-gradient(100deg,transparent,rgba(255,255,255,.28),transparent);animation:sheen 4.5s ease-in-out 1.2s infinite}
+@keyframes sheen{0%,60%{left:-60%}100%{left:130%}}
+.strands{display:block;width:100%;height:64px;overflow:visible}
+.strands path{fill:none;stroke-width:2;stroke-linecap:round}
+.strands .s1{animation:flow 6s linear infinite}.strands .s2{animation:flow 4.2s linear infinite reverse}
+@keyframes flow{to{transform:translateX(120px)}}
+@media (prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important}}
+main{text-align:center;align-items:center}
+/* 가운데 구슬. 쉴 때는 천천히 숨쉬고, 재생되면 물결이 퍼지고 띠가 돈다 */
+.orb{position:relative;width:230px;height:230px;display:grid;place-items:center;flex:none}
+.orb .ring{position:absolute;border-radius:50%;border:1px solid rgba(183,172,255,.16)}
+.orb .r1{inset:0}.orb .r2{inset:26px;border-color:rgba(183,172,255,.24)}
+.orb .wave{position:absolute;inset:50px;border-radius:50%;border:1.5px solid rgba(157,144,255,.6);opacity:0}
+.orb .halo{position:absolute;inset:40px;border-radius:50%;opacity:0;transition:opacity .8s;
+background:conic-gradient(from 0deg,transparent 0 55%,rgba(61,220,151,.9) 80%,transparent 100%);
+-webkit-mask:radial-gradient(circle,transparent 66%,#000 67%);mask:radial-gradient(circle,transparent 66%,#000 67%)}
+.core{position:relative;width:130px;height:130px;border-radius:50%;display:grid;place-items:center;
+background:radial-gradient(circle at 34% 28%,#A99DFF 0%,#6C5CE7 42%,#35288F 78%,#1C1552 100%);
+box-shadow:0 0 70px rgba(108,92,231,.55),0 0 0 1px rgba(255,255,255,.08) inset,inset -12px -16px 30px rgba(0,0,0,.35);
+animation:breathe 5s ease-in-out infinite}
+@keyframes breathe{50%{transform:scale(1.04);box-shadow:0 0 95px rgba(108,92,231,.7),0 0 0 1px rgba(255,255,255,.08) inset,inset -12px -16px 30px rgba(0,0,0,.35)}}
+.eq{display:flex;gap:5px;align-items:center;height:46px}
+.eq i{width:5px;height:10px;border-radius:3px;background:rgba(255,255,255,.92);transition:height .4s}
+.eq i:nth-child(2){height:18px}.eq i:nth-child(3){height:26px}.eq i:nth-child(4){height:16px}.eq i:nth-child(5){height:9px}
+[data-k=on] .eq i{animation:eq 1.1s ease-in-out infinite}
+.eq i:nth-child(1){animation-delay:-.2s}.eq i:nth-child(2){animation-delay:-.6s}
+.eq i:nth-child(3){animation-delay:-.1s}.eq i:nth-child(4){animation-delay:-.8s}.eq i:nth-child(5){animation-delay:-.4s}
+@keyframes eq{0%,100%{height:10px}50%{height:42px}}
+[data-k=on] .wave{animation:wave 3s ease-out infinite}
+[data-k=on] .w2{animation-delay:1s}[data-k=on] .w3{animation-delay:2s}
+@keyframes wave{from{transform:scale(1);opacity:.9}to{transform:scale(1.9);opacity:0}}
+[data-k=on] .halo{opacity:1;animation:spin 3.2s linear infinite}
+[data-k=wait] .halo{opacity:.6;animation:spin 1.4s linear infinite;filter:hue-rotate(95deg)}
+@keyframes spin{to{transform:rotate(1turn)}}
+/* 들어온 뒤에는 가운데 구슬이 음소거 버튼이다 */
+.want .orb{cursor:pointer;-webkit-tap-highlight-color:transparent}
+.want .orb:active .core{transform:scale(.96)}
+[data-k=mute] .core{animation:none;filter:saturate(.4) brightness(.75);box-shadow:0 0 30px rgba(108,92,231,.25),inset -12px -16px 30px rgba(0,0,0,.35)}
+[data-k=mute] .eq i{height:4px!important;opacity:.7}
+[data-k=mute] .dot{display:block;background:var(--faint)}
+.eyebrow{margin-top:26px}
+h1{font-size:28px;font-weight:800;letter-spacing:-.03em;margin-top:8px;word-break:keep-all;line-height:1.25}
+.st{display:inline-flex;gap:8px;align-items:center;justify-content:center;margin-top:10px;font-size:14px;color:var(--dim);min-height:21px;line-height:1.45}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;display:none}
+[data-k=on] .st{color:var(--live)}[data-k=on] .dot{display:block;background:var(--live);box-shadow:0 0 10px var(--live)}
+[data-k=wait] .dot{display:block;background:var(--lav);animation:blink 1.1s infinite}
+[data-k=bad] .st{color:var(--danger)}
+@keyframes blink{50%{opacity:.25}}
+#form{margin-top:26px;width:100%;padding:18px 18px 20px}
+.lab{font-size:12.5px;font-weight:600;color:var(--dim);letter-spacing:.04em}
+.pin{position:relative;display:flex;gap:10px;justify-content:center;margin-top:12px}
+.pin div{width:56px;height:64px;border-radius:16px;background:rgba(7,8,12,.55);border:1.5px solid rgba(255,255,255,.1);
+display:grid;place-items:center;font-size:26px;font-weight:700;transition:border-color .2s,box-shadow .2s}
+.pin div.on{border-color:var(--accent);box-shadow:0 0 0 4px rgba(108,92,231,.18)}
+.pin div.on:empty:after{content:'';width:2px;height:26px;background:var(--lav);animation:blink 1s steps(1) infinite}
+[data-k=bad] .pin div{border-color:rgba(255,122,122,.5);animation:shake .35s}
+@keyframes shake{25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+.pin input{position:absolute;inset:0;width:100%;opacity:0;font-size:16px;border:0;background:none;color:transparent}
+.btn{margin-top:16px}
+.want .lab,.want .pin{display:none}
+.want #form{background:none;border-color:transparent;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;padding:0}
+.want:not(.muted) .btn{margin-top:30px;background:rgba(23,26,40,.55);box-shadow:none;border:1px solid var(--stroke);color:var(--dim)}
+.want:not(.muted) .btn:after{display:none}
+.want.muted .btn{margin-top:30px}
+/* 브라우저에 쌓인 소리 양. 따라잡기가 제대로 도는지 눈으로 보려고 둔다 */
+.lag{margin-top:4px;font-size:12px;color:var(--faint);min-height:18px;font-variant-numeric:tabular-nums}
+.fine{margin-top:16px;font-size:12.5px;color:var(--faint);line-height:1.55}
+</style></head><body>
+<div class=aura><i class=a1></i><i class=a2></i><i class=a3></i></div><div class=grain></div>
+<header class=top><div class=brand>이음<span class=seal aria-hidden=true>音</span></div></header>
+<main>
+<div class=orb><span class="ring r1"></span><span class="ring r2"></span>
+<span class="wave w1"></span><span class="wave w2"></span><span class="wave w3"></span><span class=halo></span>
+<div class=core><div class=eq><i></i><i></i><i></i><i></i><i></i></div></div></div>
+<div><p class=eyebrow>초대받은 방</p><h1>%ROOM%</h1>
+<div class=st><span class=dot></span><span id=s>호스트가 알려준 비밀번호를 입력하세요</span></div>
+<div class=lag id=lag></div></div>
+<div id=form class=glass><div class=lab>비밀번호 4자리</div>
+<div class=pin id=pin><div></div><div></div><div></div><div></div>
+<input id=p type=tel inputmode=numeric autocomplete=one-time-code maxlength=4 aria-label='비밀번호 4자리'></div>
+<button id=b class=btn>재생</button></div>
+<p class=fine>화면을 꺼도 계속 들려요 · 볼륨은 폰 옆 버튼으로</p>
+</main>
+<audio id=a playsinline></audio>
+<script>
+var a=document.getElementById('a'),b=document.getElementById('b'),
+s=document.getElementById('s'),p=document.getElementById('p'),
+boxes=document.getElementById('pin').children,body=document.body;
+// k: ''=안내, on=재생 중, mute=소리만 끔, wait=연결·재접속 중, bad=오류. 색·애니메이션이 이 값을 따른다.
+function say(m,k){s.textContent=m;body.setAttribute('data-k',k||'');}
+// 칸 네 개는 그림일 뿐이고, 실제 입력은 그 위에 투명하게 덮은 input 하나가 받는다.
+function draw(){var v=p.value;for(var i=0;i<4;i++){boxes[i].textContent=v[i]||'';
+boxes[i].className=(document.activeElement===p&&i===Math.min(v.length,3))?'on':'';}}
+p.oninput=function(){p.value=p.value.replace(/\\D/g,'').slice(0,4);draw();
+if(body.getAttribute('data-k')==='bad')say('호스트가 알려준 비밀번호를 입력하세요');};
+p.onfocus=p.onblur=draw;
+// 방 코드 페이지(site/)에서 넘어오면 주소에 ?pw= 가 붙어 있다. 채워만 둔다 —
+// 재생은 사용자 제스처가 있어야 시작되므로 버튼은 직접 눌러야 한다.
+var q=(new URLSearchParams(location.search).get('pw')||'').replace(/\\D/g,'');
+if(q.length===4){p.value=q;say('재생을 누르세요');}
+draw();
+// want: 사용자가 '듣겠다'고 한 상태. 끊겨도 이게 true 면 계속 재시도한다.
+var want=false,tries=0,lastT=-1,lastAt=0,timer=null,pw='';
+// 호스트가 꺼졌는지 내 Wi-Fi 가 끊겼는지는 둘 다 '연결 실패'라 브라우저로는 못 가른다.
+// 호스트가 직접 410 을 주면 확실한 종료다. 그 신호를 놓친 채 LOST_MS 동안 계속 실패하면
+// '연결할 수 없어요'로 알리되, 진짜 끊김이었을 수도 있으니 LOST_RETRY 간격으로 계속 붙어 본다.
+// 내 기기가 오프라인(navigator.onLine)인 동안은 확실히 내 쪽 문제라 이 시간에 넣지 않는다.
+var LOST_MS=30000,LOST_RETRY=15000,failSince=0,lost=false;
+// muted: 소리만 끈 상태. 연결은 그대로 두고 계속 받는다 — 다시 켜면 멈춘 자리가 아니라
+// 지금 나오는 소리부터 들린다. 끊었다 붙으면 재접속 지연이 생기고 스트림도 새로 받아야 한다.
+var muted=false;
+var OK='재생 중 — 화면을 꺼도 계속 들려요';
+function setWant(w){want=w;body.className=w?'want':'';p.disabled=w;b.textContent=w?'연결 중…':'재생';
+failSince=0;lost=false;
+if(!w){muted=false;a.muted=false;clearTimeout(timer);timer=null;a.removeAttribute('src');a.load();}}
+// 붙는 데 성공했거나 호스트가 대답했다 — 호스트는 살아 있다.
+function alive(){failSince=0;if(lost){lost=false;b.textContent='연결 중…';}}
+// 소리가 나오고 있을 때의 상태 표시. 음소거 중이면 그쪽으로 보여준다.
+function live(){body.classList.toggle('muted',muted);b.textContent=muted?'다시 듣기':'소리 끄기';
+if(muted)say('소리 꺼짐 — 가운데를 누르면 다시 들려요','mute');else say(OK,'on');
+if('mediaSession' in navigator)navigator.mediaSession.playbackState=muted?'paused':'playing';}
+function toggleMute(){var k=body.getAttribute('data-k');if(!want||(k!=='on'&&k!=='mute'))return;
+muted=!muted;a.muted=muted;live();}
+function connect(){
+if(!lost)say(tries?('재접속 중… ('+tries+'회)'):'연결 중…','wait');
+a.src='/stream?pw='+encodeURIComponent(pw)+'&t='+Date.now()+'-'+tries;
+lastT=-1;lastAt=Date.now();
+a.play().then(function(){tries=0;alive();live();
+if('mediaSession' in navigator){navigator.mediaSession.metadata=
+new MediaMetadata({title:'이음',artist:document.querySelector('h1').textContent});
+// 잠금화면·이어폰의 일시정지도 음소거로 받는다. 진짜로 멈추면 감시견이 '멈춤'으로 보고 다시 붙는다.
+try{navigator.mediaSession.setActionHandler('pause',function(){if(!muted)toggleMute();});
+navigator.mediaSession.setActionHandler('play',function(){if(muted)toggleMute();});}catch(e){}}
+}).catch(function(e){fail('재생 실패: '+e.name);});}
+// 왜 끊겼는지 서버에 따로 물어본다. <audio> 는 실패해도 상태 코드를
+// 안 주기 때문에, 이게 없으면 비밀번호가 틀린 건지 Wi-Fi 가 끊긴 건지
+// 구분을 못 하고 영원히 '재접속 중…' 만 띄운다.
+function fail(msg){if(!want)return;
+fetch('/check?pw='+encodeURIComponent(pw),{cache:'no-store'}).then(function(r){
+if(!want)return;
+if(r.status===204){alive();say(msg,'wait');retry();return;}
+if(r.status===410){setWant(false);say('호스트가 공유를 종료했어요');return;}
+setWant(false);p.value='';draw();
+say(r.status===429?'시도가 너무 많아요 — 잠시 후 다시 해 주세요':'비밀번호가 맞지 않아요','bad');
+}).catch(unreachable);}
+// 호스트에 아예 닿지 않음. 누구 탓인지 가를 수 있는 만큼만 가른다.
+// '재생 실패: NotSupportedError' 같은 브라우저 사정은 여기선 의미가 없어 재접속 횟수만 보여준다.
+function unreachable(){if(!want)return;
+if(!navigator.onLine){failSince=0;lost=false;b.textContent='연결 중…';say('Wi-Fi 연결을 확인해 주세요','wait');retry();return;}
+var now=Date.now();if(!failSince)failSince=now;
+if(now-failSince>=LOST_MS){if(!lost){lost=true;b.textContent='다시 시도';}
+say('연결할 수 없어요 — 방이 끝났거나 다른 Wi-Fi 일 수 있어요','bad');}
+else{b.textContent='연결 중…';say('재접속 중… ('+(tries+1)+'회)','wait');}
+retry();}
+// 지수적으로는 안 늘리고 최대 5초에서 멈춘다. 여행 중 재접속은 빠를수록 좋다.
+function retry(){if(!want||timer)return;tries++;
+timer=setTimeout(function(){timer=null;connect();},lost?LOST_RETRY:Math.min(1000*tries,5000));}
+// 바로 다시 붙어 본다. 기다리던 재시도는 버린다.
+function retryNow(){clearTimeout(timer);timer=null;tries=0;connect();}
+// ★비밀번호를 서버에 먼저 물어보고 나서 재생하면 안 된다. fetch 를 기다리는
+//   사이 사용자 제스처가 풀려서 아이폰이 play() 를 거부한다. 그래서 일단
+//   재생을 걸고, 실패했을 때만 fail() 이 이유를 따져 묻는다.
+b.onclick=function(){if(want){if(lost)retryNow();else toggleMute();return;}
+var v=(p.value||'').replace(/\\D/g,'');
+if(v.length!==4){say('비밀번호 4자리를 입력해 주세요','bad');p.focus();return;}
+pw=v;tries=0;setWant(true);p.blur();connect();};
+p.onkeydown=function(e){if(e.key==='Enter')b.click();};
+a.onerror=function(){if(want)fail('스트림 끊김 — 재접속');};
+// 호스트가 끄면 스트림이 '끝'으로 닫힌다. 그냥 다시 붙지 말고 왜 끝났는지부터 묻는다.
+a.onended=function(){if(want)fail('스트림 끊김 — 재접속');};
+a.onstalled=function(){if(want)say('버퍼링…','wait');};
+a.onplaying=function(){tries=0;alive();live();};
+// 가운데 구슬: 듣는 중이면 음소거 켜고 끄기, 아직이면 버튼과 똑같이 재생 시작
+document.querySelector('.orb').onclick=function(){b.onclick();};
+// 감시견: 이벤트가 아예 안 뜬 채 재생만 멈추는 경우(가장 흔한 실패)를 잡는다.
+// currentTime 이 4초간 안 늘면 죽은 것으로 보고 다시 붙는다.
+setInterval(function(){if(!want||timer)return;var now=Date.now();
+if(a.currentTime!==lastT){lastT=a.currentTime;lastAt=now;return;}
+if(now-lastAt>4000){if(!lost)say('멈춤 감지 — 재접속','wait');retry();}},1000);
+// 따라잡기: <audio> 는 끊기지 않으려고 몇 초치를 쌓아 두고 튼다. 와이파이가 흔들려
+// 한번 밀리면 그 뒤로도 밀린 자리부터 틀어서 지연이 계속 남는다.
+// 받아 둔 끝(buffered.end)과 지금 위치의 차이를 보고, 많이 밀렸으면 끝 근처로 건너뛰고
+// 조금 밀렸으면 살짝 빨리 틀어 티 안 나게 줄인다. 너무 바짝 붙으면 브라우저가 다시
+// 버퍼링하느라 오히려 더 쌓이므로 LAG_KEEP 만큼은 남긴다.
+var LAG_JUMP=1.0,LAG_FAST=0.6,LAG_KEEP=0.4,lagEl=document.getElementById('lag');
+setInterval(function(){
+if(!want||a.paused||!a.buffered.length){lagEl.textContent='';return;}
+var end=a.buffered.end(a.buffered.length-1),lag=end-a.currentTime;
+if(lag>LAG_JUMP){a.playbackRate=1;a.currentTime=end-LAG_KEEP;lag=LAG_KEEP;}
+else if(lag>LAG_FAST)a.playbackRate=1.05;
+else if(lag<LAG_KEEP)a.playbackRate=1;
+lagEl.textContent='버퍼 '+lag.toFixed(1)+'초';},1000);
+// 화면을 다시 켰을 때 즉시 복구를 시도한다.
+document.addEventListener('visibilitychange',function(){
+if(!document.hidden&&want&&a.paused)retryNow();});
+// Wi-Fi 가 돌아오면 기다리지 않고 바로 붙는다.
+window.addEventListener('online',function(){if(want&&a.paused)retryNow();});
+</script></body></html>
+""";
 
     /** 길이를 모르는 스트림이므로 크기 필드는 0xFFFFFFFF 로 둔다. */
     private byte[] wavHeader() {
@@ -979,6 +1273,9 @@ public class CaptureService extends Service {
 
     @Override
     public void onDestroy() {
+        // 시작하다 실패한 경우(권한 거절 등)는 공유가 '끝난' 게 아니다. 공유 전에 미리
+        // 켜 둔 핫스팟까지 꺼 버리면 안 되므로, 실제로 돌던 공유가 끝날 때만 같이 끈다.
+        if (running) MainActivity.closeHotspotWithSharing();
         running = false;
         sharing = false;
         listeners = 0;
@@ -988,7 +1285,19 @@ public class CaptureService extends Service {
         roomName = "";
         roomPw = "";
         pwFails.clear();
-        try { if (server != null) server.close(); } catch (Exception ignored) { }
+        // 서버는 바로 닫지 않는다. 스트림만 끊어서 청취자가 /check 를 묻게 하고,
+        // FAREWELL_MS 동안 410 으로 '끝났다'고 답한 뒤 닫는다 (FAREWELL_MS 참고).
+        final ServerSocket ss = server;
+        if (ss != null) {
+            farewellUntil = System.currentTimeMillis() + FAREWELL_MS;
+            lingering = ss;
+            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (lingering == ss) lingering = null;
+                    try { ss.close(); } catch (Exception ignored) { }
+                }
+            }, FAREWELL_MS);
+        }
         for (Client c : clients) c.close();
         clients.clear();
         if (record != null) { try { record.stop(); record.release(); } catch (Exception ignored) { } }

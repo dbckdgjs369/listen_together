@@ -20,8 +20,20 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 비콘을 받으려면 필요하다. 이유는 startDiscovery 주석에 적어놨다. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+    <!--
+        핫스팟(startLocalOnlyHotspot)을 켤 권한. 다른 데는 안 쓴다.
+
+        안드로이드 12 이하는 위치 권한이어야 하고, 13 부터는 NEARBY_WIFI_DEVICES 로 바뀌었다.
+        ★neverForLocation 을 빼면 안 된다. 이게 없으면 13 이상에서도 시스템이 위치 권한을
+          같이 검사해서, 핫스팟 하나 켜는 데 "위치 정보 액세스" 를 물어보게 된다.
+          위치 권한은 그래서 12 이하에만 선언한다.
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
@@ -45,9 +57,14 @@
     </queries>
 
     <application
-        android:label="같이 듣기"
+        android:label="이음"
         android:icon="@android:drawable/ic_media_play"
         android:theme="@style/AppTheme">
+
+        <!-- 없으면 광고 SDK 가 앱 시작하자마자 죽는다. 값은 app/build.gradle 에서 넣는다 -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="${admobAppId}" />
 
         <activity
             android:name=".MainActivity"

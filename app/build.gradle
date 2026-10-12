@@ -12,6 +12,16 @@ android {
         targetSdk 36
         versionCode 1
         versionName "1.0"
+
+        // AdMob ID. 지금은 구글이 공개한 **테스트용** ID 다 — 실제 광고 대신 "Test Ad" 배너가 뜬다.
+        // 개발 중에 진짜 ID 로 자기 광고를 보거나 누르면 부정 클릭으로 계정이 막힌다.
+        // 스토어에 올릴 때 release 블록에서 AdMob 콘솔에서 받은 진짜 ID 로 덮어쓴다.
+        manifestPlaceholders = [admobAppId: "ca-app-pub-3940256099942544~3347511713"]
+        buildConfigField "String", "AD_BANNER_ID", '"ca-app-pub-3940256099942544/9214589741"'
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     compileOptions {
@@ -33,4 +43,7 @@ dependencies {
     //
     // 핫스팟 SSID·비번을 손으로 옮겨 적게 하는 건 이 앱이 팔려는 것과 정반대다.
     implementation 'com.google.zxing:core:3.5.3'
+
+    // 하단 배너 광고. 화면 맨 아래 adBar 자리에 붙는다.
+    implementation 'com.google.android.gms:play-services-ads:25.5.0'
 }

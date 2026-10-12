@@ -61,6 +61,32 @@ public class PlayerService extends Service {
      * **재시도 중인 실패**와 **끝난 실패**를 화면이 구분할 수 있어야 한다.
      */
     public static volatile boolean denied;
+    /**
+     * 듣는 중 화면에 띄우는 값. 1초마다 지연 계측 줄과 같이 갱신한다. -1 은 아직 모름.
+     * latencyMs 는 스피커까지의 실제 지연(true)이 있으면 그걸, 없으면 우리 버퍼 양이다.
+     */
+    public static volatile int latencyMs = -1;
+    public static volatile int netPct = -1;
+    public static volatile int sampleRate;
+    /**
+     * 서비스가 **스스로** 듣기를 끝낸 이유. 화면이 한 번 띄우고 비운다.
+     * onDestroy 에서 지우지 않는다 — 서비스가 죽은 뒤에 화면이 읽어야 하는 값이다.
+     *
+     * 이게 없던 시절, 호스트가 공유를 끈 뒤에도 1초마다 재접속을 6분 넘게 했고
+     * 홈에는 계속 "듣는 중" 이 떠 있었다. 닫힌 방을 영원히 기다렸다.
+     */
+    public static volatile String endedReason;
+    /**
+     * 소리만 끈다. **연결은 그대로라** 다시 켜면 그 순간의 소리가 바로 나온다 —
+     * 멈춘 자리부터 이어 듣는 일시정지가 아니다. 같이 듣는 물건이라 뒤처지면 안 된다.
+     * 재생 루프가 매 조각마다 보고 track 음량에 반영한다.
+     */
+    public static volatile boolean muted;
+
+    /** 호스트가 연결을 **거절**하기만 한 지 이만큼이면 공유를 끈 것으로 본다. */
+    private static final long GIVE_UP_REFUSED_MS = 10_000;
+    /** 응답이 없는 쪽(Wi-Fi 흔들림 등)은 더 기다린다. 그래도 끝은 있어야 배터리를 안 먹는다. */
+    private static final long GIVE_UP_ANY_MS = 120_000;
 
     private volatile boolean running;
     /** 접속 대상. 루프가 매 회차 다시 읽으므로 도중에 갈아끼울 수 있다. */
@@ -77,6 +103,8 @@ public class PlayerService extends Service {
     private AudioTrack track;
     /** 지금 track 이 물고 있는 샘플레이트. 호스트가 바뀌면 track 을 다시 만든다. */
     private int trackRate;
+    /** track 에 실제로 걸려 있는 음소거 상태. muted 와 다르면 다음 조각에서 맞춘다. */
+    private boolean appliedMute;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
 
@@ -108,6 +136,7 @@ public class PlayerService extends Service {
             host = want;
             pw = wantPw;
             denied = false;
+            muted = false;
             setState("연결 중…");
             startForegroundCompat(want);
             closeSock();     // 읽기를 끊어 루프가 새 주소로 다시 붙게 한다
@@ -117,6 +146,8 @@ public class PlayerService extends Service {
         host = want;
         pw = wantPw;
         denied = false;
+        endedReason = null;
+        muted = false;
         // setState 가 running 을 보고 무시하므로, 첫 상태를 쓰기 전에 세워야 한다.
         // 순서가 뒤집히면 "연결 중…" 이 통째로 삼켜져 화면이 빈 채로 시작한다.
         running = true;
@@ -165,7 +196,7 @@ public class PlayerService extends Service {
     private void startForegroundCompat(String host) {
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(
-                CHANNEL_ID, "같이 듣기", NotificationManager.IMPORTANCE_LOW));
+                CHANNEL_ID, "이음", NotificationManager.IMPORTANCE_LOW));
         Intent stop = new Intent(this, PlayerService.class).setAction(CaptureService.ACTION_STOP);
         android.app.PendingIntent pi = android.app.PendingIntent.getService(this, 1, stop,
                 android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
@@ -223,11 +254,18 @@ public class PlayerService extends Service {
 
     private void playLoop() {
         int minBuf = 0;
+        // 끊긴 뒤 다시 붙지 못한 채 지난 시각. 0 이면 지금 붙어 있거나 막 시작했다.
+        long failSince = 0;
+        String failHost = null;
+        boolean refusedOnly = true;
+        boolean everConnected = false;
 
         while (running) {
             // 매 회차 현재 대상을 다시 읽는다. onStartCommand 가 도중에 바꿔치기하면
             // 소켓이 끊기고 여기로 떨어져, 다음 바퀴에서 새 주소로 붙는다.
             String host = this.host;
+            // 이번 회차의 실패가 "거절" 이 아니었는가. 연결을 닫은 것(EOF)은 거절 쪽으로 친다.
+            boolean notRefused = false;
             try {
                 sock = new Socket();
                 sock.connect(new InetSocketAddress(host, CaptureService.PORT), 4000);
@@ -271,9 +309,15 @@ public class PlayerService extends Service {
                     track = buildTrack(rate, minBuf);
                     trackRate = rate;
                     track.play();
+                    appliedMute = false;
                 }
                 Log.i(TAG, "player connected to " + host);
+                sampleRate = rate;
+                latencyMs = -1;
+                netPct = -1;
                 setState("듣는 중");
+                failSince = 0;
+                everConnected = true;
 
                 // ── 지연 계측 ──────────────────────────────
                 // 우리가 AudioTrack 에 밀어넣은 프레임 수와, 실제로 스피커까지 나간
@@ -291,6 +335,10 @@ public class PlayerService extends Service {
                 byte[] buf = new byte[minBuf];
                 int read;
                 while (running && (read = in.read(buf)) > 0) {
+                    if (muted != appliedMute) {
+                        appliedMute = muted;
+                        track.setVolume(appliedMute ? 0f : 1f);
+                    }
                     track.write(buf, 0, read);
                     writtenFrames += read / 4;      // 16bit 스테레오 = 프레임당 4바이트
                     recvBytes += read;
@@ -334,12 +382,23 @@ public class PlayerService extends Service {
                         Log.i(TAG, String.format(
                                 "PLAY buf=%dms true=%dms net=%d%% under=%d gap=%dms",
                                 bufMs, trueMs, netPct, under, gapMs));
+                        latencyMs = (int) (trueMs >= 0 ? trueMs : bufMs);
+                        PlayerService.netPct = netPct;
                         recvBytes = 0;
                         lastLog = now;
                     }
                 }
+                // 호스트가 연결을 닫았다(공유 끄기 등). 예외가 아니라서 그냥 두면
+                // 다음 실패가 날 때까지 화면이 "듣는 중" 으로 남는다.
+                setState("연결 끊김 — 다시 연결 중");
             } catch (Exception e) {
                 Log.w(TAG, "player: " + e);
+                // ECONNREFUSED 는 "폰은 있는데 그 포트에서 아무도 안 받는다" — 공유를 끈 것이다.
+                // 시간 초과·네트워크 없음은 Wi-Fi 가 잠깐 흔들린 것일 수 있어 따로 센다.
+                if (!(e instanceof java.net.ConnectException
+                        && String.valueOf(e.getMessage()).contains("ECONNREFUSED"))) {
+                    notRefused = true;
+                }
                 // 실패를 화면까지 올린다. 조용히 재시도만 하면 사용자 눈에는
                 // "듣는 중" 인데 소리만 안 나는 상태로 보인다. 그게 제일 나쁘다.
                 setState(e instanceof java.net.UnknownHostException
@@ -348,6 +407,27 @@ public class PlayerService extends Service {
             }
             closeSock();
             if (!running) break;
+
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (failSince == 0 || !host.equals(failHost)) {
+                failSince = now;
+                failHost = host;
+                refusedOnly = true;
+            }
+            if (notRefused) refusedOnly = false;
+            String end = null;
+            if (refusedOnly && now - failSince >= GIVE_UP_REFUSED_MS) {
+                end = everConnected ? "방이 종료됐어요" : "방에 연결할 수 없어요";
+            } else if (now - failSince >= GIVE_UP_ANY_MS) {
+                end = "연결이 2분 넘게 끊겨서 듣기를 멈췄어요";
+            }
+            if (end != null) {
+                Log.i(TAG, "player 포기: " + end);
+                endedReason = end;
+                running = false;
+                stopSelf();
+                break;
+            }
             try { Thread.sleep(1000); } catch (InterruptedException ignored) { }
             Log.i(TAG, "player reconnecting…");
         }
@@ -460,6 +540,9 @@ public class PlayerService extends Service {
         currentHost = null;
         stateText = "";
         denied = false;
+        muted = false;
+        latencyMs = -1;
+        netPct = -1;
         closeSock();
         if (track != null) { try { track.stop(); track.release(); } catch (Exception ignored) { } }
         releaseLocks();

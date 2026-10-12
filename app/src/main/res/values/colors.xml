@@ -11,9 +11,16 @@
 
     <color name="text">#F2F4F8</color>
     <color name="text_dim">#8A93A6</color>
+    <!-- 설명보다 한 단계 더 뒤로 빠지는 글씨. 아이콘 화살표·자잘한 안내 -->
+    <color name="text_faint">#5B6376</color>
 
     <color name="accent">#6C5CE7</color>
     <color name="accent_press">#5A4BD4</color>
     <color name="live">#3DDC97</color>
     <color name="danger">#FF6B6B</color>
+
+    <color name="live_soft">#243DDC97</color>
+    <color name="danger_soft">#26FF6B6B</color>
+    <color name="danger_line">#59FF6B6B</color>
+    <color name="ripple">#1FFFFFFF</color>
 </resources>

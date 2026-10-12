@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  하단 고정 배너 자리. AdBanner 가 adContainer 에 배너를 넣는다.
+  광고를 받기 전·못 받았을 때는 gone 이라 빈 띠가 남지 않는다.
+  위쪽 버튼과는 화면 아래 여백 + 구분선으로 뗀다. 잘못 눌린 광고 클릭은 광고 정책 위반이고 계정 정지로 이어진다.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:visibility="gone">
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/stroke" />
+
+    <FrameLayout
+        android:id="@+id/adContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/surface" />
+</LinearLayout>
