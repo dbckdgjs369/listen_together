@@ -1,0 +1,9 @@
+{
+  "name": "이음",
+  "short_name": "이음",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#111111"
+}
