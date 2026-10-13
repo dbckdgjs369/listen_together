@@ -67,6 +67,8 @@ final class StreamServer {
     let roomId: String
     var roomName: String
     let roomPw: String
+    /// 앱 화면의 '공유 중지'. 방송은 확장만 끝낼 수 있어서 앱이 /stop 으로 부탁한다.
+    var onStopRequest: (() -> Void)?
 
     /// 틀린 비밀번호 기록. 주소 → (실패 횟수, 이 시각 전까지 거절)
     private var pwFails: [String: (Int, Date)] = [:]
@@ -160,6 +162,20 @@ final class StreamServer {
             return
         }
 
+        #if DEBUG
+        if path.hasPrefix("/diagraw") {
+            reply(fd, "200 OK", "application/octet-stream", Diag.shared.rawDump())
+            return
+        }
+        if path.hasPrefix("/diag") {
+            if let r = param(path, "rec") { Diag.shared.recording = r == "1" }
+            // 개발용. 캡처가 실제로 받는 포맷·양을 맥에서 curl 로 본다(Diag.swift).
+            let body = Diag.shared.json(extra: ["clients": clientCount, "dropped": droppedTotal, "pw": roomPw])
+            reply(fd, "200 OK", "application/json; charset=utf-8", body)
+            return
+        }
+        #endif
+
         if path.hasPrefix("/host") {
             // 방 코드엔 비밀번호가 들어 있다. 같은 폰(앱 화면)에게만 알려준다.
             guard peer == "127.0.0.1" else {
@@ -171,6 +187,16 @@ final class StreamServer {
                                        "addrs": addrs, "listeners": clientCount]
             let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
             reply(fd, "200 OK", "application/json; charset=utf-8", data)
+            return
+        }
+
+        if path.hasPrefix("/stop") {
+            // 같은 폰(앱 화면)만 끌 수 있다.
+            guard peer == "127.0.0.1" else {
+                reply(fd, "403 Forbidden", "text/plain", Data()); return
+            }
+            reply(fd, "204 No Content", nil, nil)
+            onStopRequest?()
             return
         }
 

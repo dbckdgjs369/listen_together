@@ -17,7 +17,11 @@ final class PCMConverter {
 
     private(set) var describedFormat: String?
 
-    func convert(_ sampleBuffer: CMSampleBuffer) -> Data? {
+    /// 디코딩 결과. 원본 레이트 그대로의 채널별 Float(-1..1).
+    struct Decoded { var l: [Float]; var r: [Float]; var rate: Double }
+
+    /// ── 1) CMSampleBuffer → 채널별 Float. 리샘플은 하지 않는다 — 그 전에 SparseRepair 가 끼어든다.
+    func decode(_ sampleBuffer: CMSampleBuffer) -> Decoded? {
         guard let fd = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(fd) else { return nil }
         let asbd = asbdPtr.pointee
@@ -47,7 +51,7 @@ final class PCMConverter {
         guard status == noErr else { return nil }
 
         // blockBuffer 가 살아 있어야 ablPtr 안의 포인터가 유효하다.
-        return withExtendedLifetime(blockBuffer) { () -> Data? in
+        return withExtendedLifetime(blockBuffer) { () -> Decoded? in
             let isFloat = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
             let nonInterleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
             let bigEndian = asbd.mFormatFlags & kAudioFormatFlagIsBigEndian != 0
@@ -91,37 +95,42 @@ final class PCMConverter {
             }
             guard !l.isEmpty else { return nil }
             if r.count != l.count { r = l }
+            return Decoded(l: l, r: r, rate: srcRate)
+        }
+    }
 
-            // ── 2) 레이트가 같으면 그대로, 다르면 선형 보간으로 리샘플하며 Int16 으로 굽는다
-            var out = [Int16]()
-            if srcRate == PCMFormat.rate {
-                out.reserveCapacity(l.count * 2)
-                for i in 0..<l.count { out.append(clamp(l[i])); out.append(clamp(r[i])) }
-                return out.withUnsafeBufferPointer { Data(buffer: $0) }
-            }
-
-            if !primed { lastL = l[0]; lastR = r[0]; primed = true }
-            let L = [lastL] + l
-            let R = [lastR] + r
-            let ratio = srcRate / PCMFormat.rate
-            out.reserveCapacity(Int(Double(l.count) / ratio) * 2 + 4)
-
-            var p = pos
-            let limit = Double(L.count - 1)
-            while p < limit {
-                let i = Int(p)
-                let f = Float(p - Double(i))
-                out.append(clamp(L[i] + (L[i + 1] - L[i]) * f))
-                out.append(clamp(R[i] + (R[i + 1] - R[i]) * f))
-                p += ratio
-            }
-            // 다음 버퍼의 0번은 이번 버퍼의 마지막 샘플이다. 그 기준으로 위치를 옮긴다.
-            pos = p - limit
-            lastL = l[l.count - 1]
-            lastR = r[r.count - 1]
-
+    /// ── 2) 레이트가 같으면 그대로, 다르면 선형 보간으로 리샘플하며 Int16 으로 굽는다.
+    /// 버퍼 경계를 넘어 리샘플 상태를 이어 가므로 **이어진 소리**만 넣어야 한다(SparseRepair 뒤).
+    func resample(_ l: [Float], _ r: [Float], rate srcRate: Double) -> Data? {
+        guard !l.isEmpty, r.count == l.count else { return nil }
+        var out = [Int16]()
+        if srcRate == PCMFormat.rate {
+            out.reserveCapacity(l.count * 2)
+            for i in 0..<l.count { out.append(clamp(l[i])); out.append(clamp(r[i])) }
             return out.withUnsafeBufferPointer { Data(buffer: $0) }
         }
+
+        if !primed { lastL = l[0]; lastR = r[0]; primed = true }
+        let L = [lastL] + l
+        let R = [lastR] + r
+        let ratio = srcRate / PCMFormat.rate
+        out.reserveCapacity(Int(Double(l.count) / ratio) * 2 + 4)
+
+        var p = pos
+        let limit = Double(L.count - 1)
+        while p < limit {
+            let i = Int(p)
+            let f = Float(p - Double(i))
+            out.append(clamp(L[i] + (L[i + 1] - L[i]) * f))
+            out.append(clamp(R[i] + (R[i + 1] - R[i]) * f))
+            p += ratio
+        }
+        // 다음 버퍼의 0번은 이번 버퍼의 마지막 샘플이다. 그 기준으로 위치를 옮긴다.
+        pos = p - limit
+        lastL = l[l.count - 1]
+        lastR = r[r.count - 1]
+
+        return out.withUnsafeBufferPointer { Data(buffer: $0) }
     }
 
     /// 원시 바이트에서 stride 간격으로 한 채널을 뽑아 Float(-1..1) 로 만든다.
