@@ -778,6 +778,26 @@ public class CaptureService extends Service {
                 return;
             }
 
+            // 방 소개 창구. 아이폰 앱이 같은 망의 주소를 하나씩 두드려 방을 찾을 때 쓴다.
+            //
+            // 아이폰은 UDP 브로드캐스트를 받으려면 애플의 별도 승인(멀티캐스트 권한)이
+            // 필요해서 비콘을 못 듣는다. 그래서 주소를 직접 훑는데, /check 로 두드리면
+            // 비밀번호 실패로 세어져 진짜 입장이 막힌다. 비밀번호를 안 묻는 창구가 따로 필요하다.
+            // 비콘과 같은 정보만 준다 — 비밀번호는 싣지 않는다.
+            if (path.startsWith("/info")) {
+                byte[] body = ("{\"app\":\"ieum\",\"id\":" + json(roomId)
+                        + ",\"name\":" + json(roomName)
+                        + ",\"locked\":" + !roomPw.isEmpty() + "}").getBytes("UTF-8");
+                out.write(("HTTP/1.1 200 OK\r\n"
+                        + "Content-Type: application/json; charset=utf-8\r\n"
+                        + "Content-Length: " + body.length + "\r\n"
+                        + "Connection: close\r\n\r\n").getBytes("UTF-8"));
+                out.write(body);
+                out.flush();
+                s.close();
+                return;
+            }
+
             // 비밀번호만 확인하고 끊는 창구. 브라우저 전용이다.
             //
             // <audio> 는 실패해도 **HTTP 상태 코드를 안 알려준다.** 그래서 페이지가
@@ -990,6 +1010,17 @@ public class CaptureService extends Service {
         return "";
     }
 
+    /** /info 에 싣는 문자열. 방 이름에 따옴표·역슬래시가 들어가도 JSON 이 깨지지 않게. */
+    private static String json(String t) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (char c : (t == null ? "" : t).toCharArray()) {
+            if (c == '"' || c == '\\') sb.append('\\').append(c);
+            else if (c < 0x20) sb.append(String.format(java.util.Locale.ROOT, "\\u%04x", (int) c));
+            else sb.append(c);
+        }
+        return sb.append('"').toString();
+    }
+
     /** 방 이름은 호스트가 적은 글이라 그대로 HTML 에 넣으면 태그가 먹는다. */
     private static String html(String t) {
         return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1118,6 +1149,12 @@ display:grid;place-items:center;font-size:26px;font-weight:700;transition:border
 /* 브라우저에 쌓인 소리 양. 따라잡기가 제대로 도는지 눈으로 보려고 둔다 */
 .lag{margin-top:4px;font-size:12px;color:var(--faint);min-height:18px;font-variant-numeric:tabular-nums}
 .fine{margin-top:16px;font-size:12.5px;color:var(--faint);line-height:1.55}
+/* 아이폰에서만 보인다. 사파리보다 앱이 화면을 꺼도 계속 들리고 지연도 짧다 */
+.applink{display:none;margin-top:14px;width:100%;padding:14px 16px;border-radius:18px;text-decoration:none;color:var(--text);
+text-align:left;font-size:14px;line-height:1.45}
+.ios .applink{display:block}
+.applink b{display:block;font-size:15px;color:var(--lav)}
+.applink span{color:var(--dim);font-size:12.5px}
 </style></head><body>
 <div class=aura><i class=a1></i><i class=a2></i><i class=a3></i></div><div class=grain></div>
 <header class=top><div class=brand>이음<span class=seal aria-hidden=true>音</span></div></header>
@@ -1132,7 +1169,8 @@ display:grid;place-items:center;font-size:26px;font-weight:700;transition:border
 <div class=pin id=pin><div></div><div></div><div></div><div></div>
 <input id=p type=tel inputmode=numeric autocomplete=one-time-code maxlength=4 aria-label='비밀번호 4자리'></div>
 <button id=b class=btn>재생</button></div>
-<p class=fine>화면을 꺼도 계속 들려요 · 볼륨은 폰 옆 버튼으로</p>
+<p class=fine id=fine>화면을 꺼도 계속 들려요 · 볼륨은 폰 옆 버튼으로</p>
+<a id=app class="applink glass" href=#><b>이음 앱으로 듣기 ›</b><span>앱이 있으면 화면을 꺼도 계속 들리고 지연도 더 짧아요</span></a>
 </main>
 <audio id=a playsinline></audio>
 <script>
@@ -1152,6 +1190,53 @@ p.onfocus=p.onblur=draw;
 var q=(new URLSearchParams(location.search).get('pw')||'').replace(/\\D/g,'');
 if(q.length===4){p.value=q;say('재생을 누르세요');}
 draw();
+// 아이폰·아이패드 사파리는 끝없는 WAV 를 <audio> 로 못 튼다 — 앞 몇 바이트만 떠보고
+// 본 요청을 안 보낸 채 포기한다(실측: bytes=0-1, 0-1445 만 반복). 그래서 아이폰에서는
+// 소리를 fetch 로 직접 받아 Web Audio 로 이어 붙여 튼다. 덤으로 상태 코드를 바로 알고
+// 지연도 0.3초 안팎으로 짧다. 대신 화면을 끄면 사파리가 소리를 멈출 수 있어 앱을 권한다.
+var IOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+var wa=null,h1=document.querySelector('h1');
+if(IOS){body.classList.add('ios');
+document.getElementById('fine').textContent='사파리는 화면을 끄면 소리가 멈출 수 있어요 · 앱을 쓰면 계속 들려요';}
+document.getElementById('app').onclick=function(){
+// 페이지 재생은 먼저 끊는다. 안 그러면 사파리가 백그라운드에서 한동안 스트림을 더 받아
+// 호스트엔 청취자가 둘로 보이고 대역폭도 두 배로 쓴다.
+if(want){setWant(false);say('이음 앱에서 듣는 중이에요');}
+location.href='ieum://join?host='+encodeURIComponent(location.hostname)+'&pw='+encodeURIComponent(p.value||'')
++'&name='+encodeURIComponent(h1.textContent);return false;};
+function WA(){var C=window.AudioContext||window.webkitAudioContext,ctx=new C(),g=ctx.createGain(),next=0;
+g.connect(ctx.destination);
+// 무음 스위치를 켜 둬도 들리게(사파리 17+). 없는 브라우저는 그냥 넘어간다.
+try{if(navigator.audioSession)navigator.audioSession.type='playback';}catch(e){}
+var w={ctx:ctx,t:0,ctl:null,
+lag:function(){return Math.max(0,next-ctx.currentTime);},
+mute:function(m){g.gain.value=m?0:1;},
+stop:function(){if(w.ctl)w.ctl.abort();w.ctl=null;},
+// 응답 상태 코드로 끝나는 약속을 돌려준다. 200 이면 그 뒤로 계속 받으며 튼다.
+start:function(url,onend){w.stop();var ctl=new AbortController();w.ctl=ctl;next=0;ctx.resume();
+return fetch(url,{cache:'no-store',signal:ctl.signal}).then(function(r){
+if(r.status!==200&&r.status!==206){ctl.abort();return r.status;}
+var rd=r.body.getReader(),head=new Uint8Array(0),rate=48000,ch=2,left=new Uint8Array(0);
+function play(bytes,n){var dv=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),
+buf=ctx.createBuffer(2,n,rate),L=buf.getChannelData(0),R=buf.getChannelData(1),fb=2*ch;
+for(var i=0;i<n;i++){L[i]=dv.getInt16(i*fb,true)/32768;R[i]=ch>1?dv.getInt16(i*fb+2,true)/32768:L[i];}
+var now=ctx.currentTime;
+if(next<now+0.03)next=now+0.25;   // 처음이거나 끊겼다: 0.25초 여유를 두고 다시 잇는다
+else if(next>now+1.2)return;      // 너무 쌓였다: 이 조각은 버리고 따라잡는다
+var src=ctx.createBufferSource();src.buffer=buf;src.connect(g);src.start(next);next+=n/rate;}
+function pump(){return rd.read().then(function(x){if(ctl.signal.aborted)return;
+if(x.done){onend();return;}
+var d=x.value;w.t++;
+if(head.length<44){var need=Math.min(44-head.length,d.length),h=new Uint8Array(head.length+need);
+h.set(head);h.set(d.subarray(0,need),head.length);head=h;d=d.subarray(need);
+if(head.length===44){var v=new DataView(head.buffer);ch=v.getUint16(22,true)||2;rate=v.getUint32(24,true)||48000;}}
+if(d.length){var m=new Uint8Array(left.length+d.length);m.set(left);m.set(d,left.length);left=m;
+var fb=2*ch;if(left.length>=Math.round(rate*0.05)*fb){   // 50ms 씩 모아 하나로 튼다
+var n=Math.floor(left.length/fb);play(left.subarray(0,n*fb),n);left=left.slice(n*fb);}}
+return pump();});}
+pump().catch(function(){if(!ctl.signal.aborted)onend();});
+return 200;});}};
+return w;}
 // want: 사용자가 '듣겠다'고 한 상태. 끊겨도 이게 true 면 계속 재시도한다.
 var want=false,tries=0,lastT=-1,lastAt=0,timer=null,pw='';
 // 호스트가 꺼졌는지 내 Wi-Fi 가 끊겼는지는 둘 다 '연결 실패'라 브라우저로는 못 가른다.
@@ -1162,10 +1247,11 @@ var LOST_MS=30000,LOST_RETRY=15000,failSince=0,lost=false;
 // muted: 소리만 끈 상태. 연결은 그대로 두고 계속 받는다 — 다시 켜면 멈춘 자리가 아니라
 // 지금 나오는 소리부터 들린다. 끊었다 붙으면 재접속 지연이 생기고 스트림도 새로 받아야 한다.
 var muted=false;
-var OK='재생 중 — 화면을 꺼도 계속 들려요';
-function setWant(w){want=w;body.className=w?'want':'';p.disabled=w;b.textContent=w?'연결 중…':'재생';
+var OK=IOS?'재생 중':'재생 중 — 화면을 꺼도 계속 들려요';
+function setWant(w){want=w;body.classList.toggle('want',w);if(!w)body.classList.remove('muted');p.disabled=w;b.textContent=w?'연결 중…':'재생';
 failSince=0;lost=false;
-if(!w){muted=false;a.muted=false;clearTimeout(timer);timer=null;a.removeAttribute('src');a.load();}}
+if(!w){muted=false;a.muted=false;clearTimeout(timer);timer=null;if(wa){wa.stop();wa.mute(false);}
+else{a.removeAttribute('src');a.load();}}}
 // 붙는 데 성공했거나 호스트가 대답했다 — 호스트는 살아 있다.
 function alive(){failSince=0;if(lost){lost=false;b.textContent='연결 중…';}}
 // 소리가 나오고 있을 때의 상태 표시. 음소거 중이면 그쪽으로 보여준다.
@@ -1173,18 +1259,23 @@ function live(){body.classList.toggle('muted',muted);b.textContent=muted?'다시
 if(muted)say('소리 꺼짐 — 가운데를 누르면 다시 들려요','mute');else say(OK,'on');
 if('mediaSession' in navigator)navigator.mediaSession.playbackState=muted?'paused':'playing';}
 function toggleMute(){var k=body.getAttribute('data-k');if(!want||(k!=='on'&&k!=='mute'))return;
-muted=!muted;a.muted=muted;live();}
+muted=!muted;a.muted=muted;if(wa)wa.mute(muted);live();}
 function connect(){
 if(!lost)say(tries?('재접속 중… ('+tries+'회)'):'연결 중…','wait');
-a.src='/stream?pw='+encodeURIComponent(pw)+'&t='+Date.now()+'-'+tries;
+var url='/stream?pw='+encodeURIComponent(pw)+'&t='+Date.now()+'-'+tries;
 lastT=-1;lastAt=Date.now();
-a.play().then(function(){tries=0;alive();live();
+if(wa){wa.start(url,function(){if(want)fail('스트림 끊김 — 재접속');}).then(function(st){if(!want)return;
+if(st===200){tries=0;alive();live();meta();}else if(st===401||st===410||st===429)verdict(st);else fail('연결 실패');
+}).catch(function(e){if(e&&e.name==='AbortError')return;unreachable();});return;}
+a.src=url;
+a.play().then(function(){tries=0;alive();live();meta();
+}).catch(function(e){fail('재생 실패: '+e.name);});}
+function meta(){
 if('mediaSession' in navigator){navigator.mediaSession.metadata=
 new MediaMetadata({title:'이음',artist:document.querySelector('h1').textContent});
 // 잠금화면·이어폰의 일시정지도 음소거로 받는다. 진짜로 멈추면 감시견이 '멈춤'으로 보고 다시 붙는다.
 try{navigator.mediaSession.setActionHandler('pause',function(){if(!muted)toggleMute();});
-navigator.mediaSession.setActionHandler('play',function(){if(muted)toggleMute();});}catch(e){}}
-}).catch(function(e){fail('재생 실패: '+e.name);});}
+navigator.mediaSession.setActionHandler('play',function(){if(muted)toggleMute();});}catch(e){}}}
 // 왜 끊겼는지 서버에 따로 물어본다. <audio> 는 실패해도 상태 코드를
 // 안 주기 때문에, 이게 없으면 비밀번호가 틀린 건지 Wi-Fi 가 끊긴 건지
 // 구분을 못 하고 영원히 '재접속 중…' 만 띄운다.
@@ -1192,10 +1283,13 @@ function fail(msg){if(!want)return;
 fetch('/check?pw='+encodeURIComponent(pw),{cache:'no-store'}).then(function(r){
 if(!want)return;
 if(r.status===204){alive();say(msg,'wait');retry();return;}
-if(r.status===410){setWant(false);say('호스트가 공유를 종료했어요');return;}
-setWant(false);p.value='';draw();
-say(r.status===429?'시도가 너무 많아요 — 잠시 후 다시 해 주세요':'비밀번호가 맞지 않아요','bad');
+verdict(r.status);
 }).catch(unreachable);}
+// 호스트가 들여보내지 않았다 — 끝났거나(410) 비밀번호 문제(401·429).
+function verdict(st){
+if(st===410){setWant(false);say('호스트가 공유를 종료했어요');return;}
+setWant(false);p.value='';draw();
+say(st===429?'시도가 너무 많아요 — 잠시 후 다시 해 주세요':'비밀번호가 맞지 않아요','bad');}
 // 호스트에 아예 닿지 않음. 누구 탓인지 가를 수 있는 만큼만 가른다.
 // '재생 실패: NotSupportedError' 같은 브라우저 사정은 여기선 의미가 없어 재접속 횟수만 보여준다.
 function unreachable(){if(!want)return;
@@ -1216,6 +1310,9 @@ function retryNow(){clearTimeout(timer);timer=null;tries=0;connect();}
 b.onclick=function(){if(want){if(lost)retryNow();else toggleMute();return;}
 var v=(p.value||'').replace(/\\D/g,'');
 if(v.length!==4){say('비밀번호 4자리를 입력해 주세요','bad');p.focus();return;}
+// 아이폰은 사용자 제스처 안에서 만든 오디오 컨텍스트만 소리를 낸다. 그래서 여기서 만든다.
+if(IOS&&!wa){try{wa=WA();}catch(e){wa=null;}}
+if(wa)wa.ctx.resume();
 pw=v;tries=0;setWant(true);p.blur();connect();};
 p.onkeydown=function(e){if(e.key==='Enter')b.click();};
 a.onerror=function(){if(want)fail('스트림 끊김 — 재접속');};
@@ -1228,7 +1325,8 @@ document.querySelector('.orb').onclick=function(){b.onclick();};
 // 감시견: 이벤트가 아예 안 뜬 채 재생만 멈추는 경우(가장 흔한 실패)를 잡는다.
 // currentTime 이 4초간 안 늘면 죽은 것으로 보고 다시 붙는다.
 setInterval(function(){if(!want||timer)return;var now=Date.now();
-if(a.currentTime!==lastT){lastT=a.currentTime;lastAt=now;return;}
+var cur=wa?wa.t:a.currentTime;
+if(cur!==lastT){lastT=cur;lastAt=now;return;}
 if(now-lastAt>4000){if(!lost)say('멈춤 감지 — 재접속','wait');retry();}},1000);
 // 따라잡기: <audio> 는 끊기지 않으려고 몇 초치를 쌓아 두고 튼다. 와이파이가 흔들려
 // 한번 밀리면 그 뒤로도 밀린 자리부터 틀어서 지연이 계속 남는다.
@@ -1237,6 +1335,7 @@ if(now-lastAt>4000){if(!lost)say('멈춤 감지 — 재접속','wait');retry();}
 // 버퍼링하느라 오히려 더 쌓이므로 LAG_KEEP 만큼은 남긴다.
 var LAG_JUMP=1.0,LAG_FAST=0.6,LAG_KEEP=0.4,lagEl=document.getElementById('lag');
 setInterval(function(){
+if(wa){lagEl.textContent=want&&wa.ctl?'버퍼 '+wa.lag().toFixed(1)+'초':'';return;}
 if(!want||a.paused||!a.buffered.length){lagEl.textContent='';return;}
 var end=a.buffered.end(a.buffered.length-1),lag=end-a.currentTime;
 if(lag>LAG_JUMP){a.playbackRate=1;a.currentTime=end-LAG_KEEP;lag=LAG_KEEP;}
@@ -1244,10 +1343,12 @@ else if(lag>LAG_FAST)a.playbackRate=1.05;
 else if(lag<LAG_KEEP)a.playbackRate=1;
 lagEl.textContent='버퍼 '+lag.toFixed(1)+'초';},1000);
 // 화면을 다시 켰을 때 즉시 복구를 시도한다.
+// 사파리는 화면이 꺼진 동안 오디오 컨텍스트를 세운다. 돌아오면 쌓인 건 지난 소리라 새로 붙는다.
 document.addEventListener('visibilitychange',function(){
-if(!document.hidden&&want&&a.paused)retryNow();});
+if(document.hidden||!want)return;
+if(wa){wa.ctx.resume();retryNow();}else if(a.paused)retryNow();});
 // Wi-Fi 가 돌아오면 기다리지 않고 바로 붙는다.
-window.addEventListener('online',function(){if(want&&a.paused)retryNow();});
+window.addEventListener('online',function(){if(want&&(wa||a.paused))retryNow();});
 </script></body></html>
 """;
 
