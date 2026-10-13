@@ -303,6 +303,9 @@ final class Player: ObservableObject {
         meter = nil
         stopAudio()
         state = .idle
+        // 방도 잊는다. 잠금화면 일시정지(pauseFromLockScreen)와 달리 '닫기'다 — 남겨 두면 카드가 안 사라진다.
+        host = ""
+        roomName = ""
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
