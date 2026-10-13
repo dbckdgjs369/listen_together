@@ -271,6 +271,28 @@ public class MainActivity extends Activity {
         sync();
 
         adBanner = new AdBanner(this, findViewById(R.id.adBar));
+
+        // 화면 회전 등으로 다시 만들어질 땐 같은 링크로 또 들어가지 않는다.
+        if (savedInstanceState == null) openLink(getIntent());
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openLink(intent);
+    }
+
+    /**
+     * 초대 링크(…/listen_together/#코드)로 열렸으면 그 방에 바로 들어간다.
+     * 코드는 # 뒤라 서버로는 안 가고 여기서만 읽힌다. 코드가 없거나 틀리면 그냥 홈이다.
+     */
+    private void openLink(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction())) return;
+        android.net.Uri u = intent.getData();
+        String raw = u == null ? null : u.getFragment();
+        String[] ipPw = raw == null ? null : RoomCode.decode(raw);
+        if (ipPw == null) return;
+        join(ipPw[0], ipPw[1], nameForIp(ipPw[0], "방 " + raw.trim().toUpperCase(Locale.ROOT)));
     }
 
     @Override protected void onResume() {
