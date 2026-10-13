@@ -1,56 +1,80 @@
-name: ListenTogether
+name: Ieum
 options:
-  bundleIdPrefix: com.example.lt
+  bundleIdPrefix: io.github.dbckdgjs369
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "16.0"
   createIntermediateGroups: true
+
+settings:
+  base:
+    # 팀 ID 는 커밋하지 않는다. 빌드할 때 DEVELOPMENT_TEAM=XXXX 로 넘기거나 Xcode 에서 고른다.
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
 
 targets:
 
-  LTHost:
+  Ieum:
     type: application
     platform: iOS
     sources:
-      - LTHost
+      - Ieum
       - LTShared
     info:
-      path: LTHost/Info.plist
+      path: Ieum/Info.plist
       properties:
-        CFBundleDisplayName: 같이듣기
-        UILaunchScreen: {}
+        CFBundleDisplayName: 이음
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: ""
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
-        # 없으면 UDP 브로드캐스트가 조용히 실패한다. 권한 창 문구이기도 하다.
-        NSLocalNetworkUsageDescription: 같은 와이파이에 있는 친구에게 소리를 보내려면 로컬 네트워크 접근이 필요합니다.
+        UIUserInterfaceStyle: Dark
+        # 화면을 꺼도 계속 들리게. 안드로이드의 포그라운드 서비스 역할이다.
+        UIBackgroundModes: [audio]
+        # 같은 Wi-Fi 의 방을 찾고 붙으려면 로컬 네트워크 권한이 필요하다. 권한 창 문구이기도 하다.
+        NSLocalNetworkUsageDescription: 같은 Wi-Fi 에 있는 친구의 방을 찾고, 친구와 소리를 주고받으려면 로컬 네트워크 접근이 필요해요.
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.dbckdgjs369.ieum
+            CFBundleURLSchemes: [ieum]
+        ITSAppUsesNonExemptEncryption: false
+    # 초대 QR·링크(https://dbckdgjs369.github.io/listen_together/#코드)를 카메라로 찍으면 앱이 열린다.
+    # 그 도메인의 /.well-known/apple-app-site-association 에 '팀ID.번들ID' 가 있어야 한다(블로그 저장소).
+    entitlements:
+      path: Ieum/Ieum.entitlements
+      properties:
+        com.apple.developer.associated-domains: [applinks:dbckdgjs369.github.io]
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.lt
-        TARGETED_DEVICE_FAMILY: "1"
-        CODE_SIGN_STYLE: Automatic
-        SWIFT_VERSION: "5.0"
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.dbckdgjs369.ieum
     dependencies:
-      - target: LTBroadcast
+      - target: IeumBroadcast
         embed: true
 
-  LTBroadcast:
+  IeumBroadcast:
     type: app-extension
     platform: iOS
     sources:
       - LTBroadcast
       - LTShared
+    preBuildScripts:
+      - name: 청취 페이지를 안드로이드 원본에서 뜬다
+        script: "\"${SRCROOT}/scripts/gen_page.sh\""
+        basedOnDependencyAnalysis: false
     info:
       path: LTBroadcast/Info.plist
       properties:
-        CFBundleDisplayName: 같이듣기
-        NSLocalNetworkUsageDescription: 같은 와이파이에 있는 친구에게 소리를 보내려면 로컬 네트워크 접근이 필요합니다.
+        CFBundleDisplayName: 이음
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSLocalNetworkUsageDescription: 같은 Wi-Fi 에 있는 친구에게 소리를 보내려면 로컬 네트워크 접근이 필요해요.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
-          RPBroadcastProcessMode: BroadcastProcessModeSampleBuffer
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
     settings:
       base:
-        # HostViewController 의 preferredExtension 과 반드시 같아야 한다.
-        # 다르면 피커 목록에 우리 확장이 아예 안 뜬다.
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.lt.broadcast
-        TARGETED_DEVICE_FAMILY: "1"
-        CODE_SIGN_STYLE: Automatic
-        SWIFT_VERSION: "5.0"
+        # ShareView 의 BroadcastPicker 가 "<앱 번들 ID>.broadcast" 로 찾는다. 반드시 맞출 것.
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.dbckdgjs369.ieum.broadcast

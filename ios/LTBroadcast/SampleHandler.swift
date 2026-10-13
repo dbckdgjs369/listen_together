@@ -1,12 +1,7 @@
 import ReplayKit
 import os
 
-/// Broadcast Upload Extension 본체.
-///
-/// **검증하려는 것은 단 하나다 — `audioApp` 이 유튜브뮤직 같은 "다른 앱"의 소리를
-/// 주느냐.** 널리 퍼진 "AVPlayer·음악 앱은 제외된다"는 말의 출처를 따라가 보면
-/// 2018년경 문서 하나로 수렴하고, 애플 공식 문서에는 그런 제외 조항이 없다.
-/// 즉 "불가능"이 아니라 "아무도 확인해준 적이 없음"이다. 이 확장이 그걸 확인한다.
+/// Broadcast Upload Extension 본체 — 아이폰이 호스트일 때 소리를 잡아 뿌린다.
 ///
 /// 판정은 **귀가 아니라 로그**로 한다. 무음이 나와도 "캡처가 막힌 것"과
 /// "재생이 멈춘 것"은 귀로 구분되지 않는다. 안드로이드에서 같은 함정에 여러 번 빠졌다.
@@ -17,7 +12,7 @@ import os
 class SampleHandler: RPBroadcastSampleHandler {
 
     private let converter = PCMConverter()
-    private let server = StreamServer()
+    private let server = StreamServer(roomName: "아이폰의 방")
     private let beacon = Beacon()
 
     private var bufCount = 0
@@ -28,10 +23,9 @@ class SampleHandler: RPBroadcastSampleHandler {
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         server.start()
-        beacon.start()
+        beacon.start(server: server)
         let addrs = Net.interfaces().map { "\($0.name)=\($0.address)" }.joined(separator: " ")
-        os_log("방송 시작 — 주소 %{public}@ 포트 %d",
-               log: log, type: .info, addrs, Int(LTPort.stream))
+        os_log("방송 시작 — 주소 %{public}@ 포트 %d", log: log, type: .info, addrs, Int(LTPort.stream))
     }
 
     override func broadcastPaused() { os_log("일시정지", log: log, type: .info) }
@@ -39,8 +33,9 @@ class SampleHandler: RPBroadcastSampleHandler {
 
     override func broadcastFinished() {
         beacon.stop()
-        server.stop()
-        os_log("방송 종료 — audioApp 버퍼 %d개 수신", log: log, type: .info, bufCount)
+        // 청취자에게 "끝났다"를 알릴 몇 초. 이 함수가 돌아가면 확장이 곧 정리되므로 여기서 기다린다.
+        server.stop(farewell: 4)
+        os_log("방송 종료", log: log, type: .info)
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer,
@@ -48,10 +43,8 @@ class SampleHandler: RPBroadcastSampleHandler {
         switch sampleBufferType {
         case .audioApp:
             handleAudio(sampleBuffer)
-        case .audioMic:
-            break                      // 마이크는 안 쓴다. 우리는 "앱 소리"만 필요하다.
-        case .video:
-            break                      // 화면은 버린다. 받긴 하지만 아무것도 안 한다.
+        case .audioMic, .video:
+            break                      // 마이크·화면은 버린다. 우리는 "앱 소리"만 필요하다.
         @unknown default:
             break
         }
@@ -61,8 +54,7 @@ class SampleHandler: RPBroadcastSampleHandler {
         bufCount += 1
         guard let pcm = converter.convert(sampleBuffer) else { return }
 
-        // RMS/peak 는 변환된 Int16 기준으로 잰다. 안드로이드 로그와 같은 척도라
-        // 두 플랫폼 수치를 그대로 비교할 수 있다.
+        // RMS/peak 는 변환된 Int16 기준으로 잰다. 안드로이드 로그와 같은 척도다.
         pcm.withUnsafeBytes { raw in
             let p = raw.bindMemory(to: Int16.self)
             for v in p {
@@ -78,7 +70,7 @@ class SampleHandler: RPBroadcastSampleHandler {
 
         let now = Date()
         if now.timeIntervalSince(lastLog) >= 1.0 {
-            let rms = sampleCount > 0 ? Int(( sumSquares / Double(sampleCount) ).squareRoot()) : 0
+            let rms = sampleCount > 0 ? Int((sumSquares / Double(sampleCount)).squareRoot()) : 0
             os_log("AUDIO buf=%d rms=%d peak=%d clients=%d drop=%d fmt=%{public}@",
                    log: log, type: .info,
                    bufCount, rms, Int(peak), server.clientCount, server.droppedTotal,

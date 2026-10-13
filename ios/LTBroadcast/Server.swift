@@ -9,8 +9,9 @@ private final class Client {
     private let lock = NSCondition()
     private var queue: [Data] = []
     private var closed = false
-    /// 청크 1개 ≈ 0.1초. 50개 = 5초.
-    private let maxChunks = 50
+    /// ReplayKit 버퍼 하나 ≈ 20ms. 100개 ≈ 2초. 넘치면 오래된 것부터 버린다 —
+    /// 늦게 들리는 것보다 잠깐 끊기는 게 낫다(같이 듣기라 다른 사람과 어긋난다).
+    private let maxChunks = 100
     private(set) var dropped = 0
 
     init(fd: Int32) { self.fd = fd }
@@ -30,7 +31,7 @@ private final class Client {
     func pop() -> Data? {
         lock.lock()
         while queue.isEmpty && !closed { lock.wait() }
-        let d = queue.isEmpty ? nil : queue.removeFirst()
+        let d = closed ? nil : queue.removeFirst()
         lock.unlock()
         return d
     }
@@ -38,11 +39,18 @@ private final class Client {
     func close() {
         lock.lock(); closed = true; lock.broadcast(); lock.unlock()
         Darwin.shutdown(fd, SHUT_RDWR)
-        Darwin.close(fd)
     }
 }
 
 /// 캡처한 PCM 을 로컬 네트워크에 WAV 스트림으로 뿌리는 최소 HTTP 서버.
+/// 안드로이드 `CaptureService.handleClient` 와 **같은 길**을 낸다 — 브라우저 페이지,
+/// 안드로이드 앱, 아이폰 앱이 호스트가 무슨 폰인지 몰라도 붙는다.
+///
+///   /info    방 소개(이름·잠김). 비밀번호를 안 묻는다 — 아이폰 앱이 주소를 훑어 방을 찾는 창구
+///   /check   비밀번호 확인만. 204 / 401 / 429
+///   /stream  소리. 비밀번호 검사는 여기서 한다
+///   /host    이 폰(127.0.0.1)에서만. 앱 화면이 방 코드·청취자 수를 읽는다
+///   그 외    재생 페이지
 ///
 /// **이게 앱이 아니라 확장(Extension) 안에서 돈다.** iOS 는 앱 본체를 홈 화면으로
 /// 나가는 순간 정지시키지만 Broadcast Upload Extension 은 별도 프로세스로 계속
@@ -53,6 +61,23 @@ final class StreamServer {
     private let clientsLock = NSLock()
     private var clients: [Client] = []
     private var running = false
+    /// 공유를 끈 뒤 작별 인사 중. 모든 요청에 410 으로 '끝났다'고 답한다.
+    private var ended = false
+
+    let roomId: String
+    var roomName: String
+    let roomPw: String
+
+    /// 틀린 비밀번호 기록. 주소 → (실패 횟수, 이 시각 전까지 거절)
+    private var pwFails: [String: (Int, Date)] = [:]
+    private let pwLock = NSLock()
+    private static let pwMaxFails = 10
+
+    init(roomName: String) {
+        roomId = String(format: "%06x", UInt32.random(in: 0...0xFFFFFF))
+        self.roomName = roomName
+        roomPw = String(format: "%04d", Int.random(in: 0...9999))
+    }
 
     var clientCount: Int {
         clientsLock.lock(); defer { clientsLock.unlock() }
@@ -71,6 +96,8 @@ final class StreamServer {
         }
         var yes: Int32 = 1
         setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        // 청취자가 끊긴 소켓에 쓰다가 SIGPIPE 로 확장이 통째로 죽지 않게.
+        setsockopt(listenFd, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
 
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
@@ -82,7 +109,7 @@ final class StreamServer {
                 Darwin.bind(listenFd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard bound == 0, listen(listenFd, 8) == 0 else {
+        guard bound == 0, listen(listenFd, 16) == 0 else {
             os_log("bind/listen 실패 errno=%d", log: log, type: .error, errno)
             Darwin.close(listenFd); listenFd = -1
             return
@@ -91,51 +118,125 @@ final class StreamServer {
         running = true
         os_log("HTTP 서버 시작 :%d", log: log, type: .info, Int(LTPort.stream))
 
-        Thread.detachNewThread { [weak self] in self?.acceptLoop() }
+        let fd = listenFd
+        Thread.detachNewThread { [weak self] in self?.acceptLoop(fd) }
     }
 
-    private func acceptLoop() {
+    private func acceptLoop(_ lfd: Int32) {
         while running {
-            let fd = accept(listenFd, nil, nil)
+            var peer = sockaddr_in()
+            var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let fd = withUnsafeMutablePointer(to: &peer) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(lfd, $0, &len) }
+            }
             if fd < 0 { if running { usleep(50_000) }; continue }
             var yes: Int32 = 1
             setsockopt(fd, Int32(IPPROTO_TCP), TCP_NODELAY, &yes, socklen_t(MemoryLayout<Int32>.size))
-            Thread.detachNewThread { [weak self] in self?.handle(fd: fd) }
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
+            // 요청 한 줄을 5초 안에 안 보내는 연결은 닫는다. 브라우저 preconnect 가
+            // 빈 연결을 열어두는데, 그걸 영원히 물고 있으면 스레드가 쌓인다.
+            var tv = timeval(tv_sec: 5, tv_usec: 0)
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+            let ip = Net.uint32ToIPv4(UInt32(bigEndian: peer.sin_addr.s_addr))
+            // 받는 스레드에서 직접 처리하지 않는다 — 위의 빈 연결 하나가 뒤의 모든 접속을 줄 세운다.
+            Thread.detachNewThread { [weak self] in self?.handle(fd: fd, peer: ip) }
         }
     }
 
-    private func handle(fd: Int32) {
+    private func handle(fd: Int32, peer: String) {
         guard let request = readRequest(fd) else { Darwin.close(fd); return }
         let path = requestPath(request)
 
-        if path != "/stream" {
-            sendAll(fd, Data(indexPage.utf8))
+        if ended {
+            reply(fd, "410 Gone", "text/plain; charset=utf-8", Data("호스트가 공유를 종료했어요.".utf8))
+            return
+        }
+
+        if path.hasPrefix("/info") {
+            let body: [String: Any] = ["app": "ieum", "id": roomId, "name": roomName,
+                                       "locked": !roomPw.isEmpty, "os": "ios"]
+            let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
+            reply(fd, "200 OK", "application/json; charset=utf-8", data)
+            return
+        }
+
+        if path.hasPrefix("/host") {
+            // 방 코드엔 비밀번호가 들어 있다. 같은 폰(앱 화면)에게만 알려준다.
+            guard peer == "127.0.0.1" else {
+                reply(fd, "403 Forbidden", "text/plain", Data()); return
+            }
+            if let n = param(path, "name"), !n.isEmpty { roomName = String(n.prefix(24)) }
+            let addrs = Net.lanInterfaces().map { $0.address }
+            let body: [String: Any] = ["id": roomId, "name": roomName, "pw": roomPw,
+                                       "addrs": addrs, "listeners": clientCount]
+            let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
+            reply(fd, "200 OK", "application/json; charset=utf-8", data)
+            return
+        }
+
+        if path.hasPrefix("/check") {
+            let deny = checkPw(peer, param(path, "pw") ?? "")
+            if deny != 0 { writeDenied(fd, deny) }
+            else { reply(fd, "204 No Content", nil, nil) }
+            return
+        }
+
+        if !path.hasPrefix("/stream") {
+            let html = Page.html.replacingOccurrences(of: "%ROOM%", with: escapeHTML(roomName.isEmpty ? "이음" : roomName))
+            reply(fd, "200 OK", "text/html; charset=utf-8", Data(html.utf8))
+            return
+        }
+
+        // ★검사는 반드시 여기다. 소리가 나가는 길은 이 한 곳뿐이다.
+        let deny = checkPw(peer, param(path, "pw") ?? "")
+        if deny != 0 {
+            os_log("입장 거부 %{public}@ → %d", log: log, type: .info, peer, deny)
+            writeDenied(fd, deny)
+            return
+        }
+
+        // ── Range 대응 ── 안드로이드 handleClient 와 같은 규칙.
+        // 사파리는 `bytes=0-1` 로 떠본 뒤 `bytes=0-` 를 보내고 206 을 기대한다.
+        // 끝이 정해진 작은 요청에는 "WAV 헤더 + 무음" 가상 파일에서 정확히 그만큼 잘라준다.
+        let huge: Int64 = 0x7FFF_FFFF_FFFF
+        let wav = wavHeader()
+        let range = parseRange(request)
+        let start = range.map { min($0.0, huge - 1) } ?? 0
+        let end = range?.1 ?? -1
+
+        if range != nil, end >= start, end - start < 64 * 1024 {
+            let len = Int(end - start + 1)
+            var body = Data(count: len)
+            for i in 0..<len where Int(start) + i < wav.count { body[i] = wav[Int(start) + i] }
+            let head = "HTTP/1.1 206 Partial Content\r\n"
+                + "Content-Range: bytes \(start)-\(end)/\(huge)\r\n"
+                + "Content-Length: \(len)\r\nContent-Type: audio/wav\r\nAccept-Ranges: bytes\r\n"
+                + "Cache-Control: no-cache\r\nConnection: close\r\n\r\n"
+            _ = sendAll(fd, Data(head.utf8)) && sendAll(fd, body)
             Darwin.close(fd)
             return
         }
 
-        // ── Range 대응 ────────────────────────────────────────
-        // 사파리는 미디어를 받을 때 `Range: bytes=0-` 를 보내고 206 을 기대하는
-        // 성향이 강하다. 끝이 없는 스트림이라 진짜 길이는 없지만, 아주 큰 값을
-        // 총 길이로 적어주면 "받다 만 파일"로 취급해 계속 재생한다.
-        // 안드로이드판 서버에는 이 처리가 없다 — 아이폰 청취가 거기서 막힌다면 범인이다.
-        let hasRange = request.range(of: "\r\nrange:", options: .caseInsensitive) != nil
-        let huge: Int64 = 0x7FFF_FFFF_FFFF
-        var headers = hasRange
-            ? "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-\(huge - 1)/\(huge)\r\n"
+        var headers = range != nil
+            ? "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes \(start)-\(huge - 1)/\(huge)\r\n"
             : "HTTP/1.1 200 OK\r\n"
-        headers += "Content-Type: audio/wav\r\n"
-        headers += "Accept-Ranges: bytes\r\n"
-        headers += "Cache-Control: no-cache\r\n"
-        headers += "Connection: close\r\n\r\n"
+        headers += "Content-Type: audio/wav\r\nAccept-Ranges: bytes\r\n"
+        headers += "Cache-Control: no-cache\r\nConnection: close\r\n\r\n"
 
-        guard sendAll(fd, Data(headers.utf8)), sendAll(fd, wavHeader()) else {
-            Darwin.close(fd); return
+        var first = Data(headers.utf8)
+        if start < wav.count {
+            first.append(wav.subdata(in: Int(start)..<wav.count))
+        } else {
+            let frame = Int64(PCMFormat.channels * PCMFormat.bits / 8)
+            let pad = (frame - (start - Int64(wav.count)) % frame) % frame
+            first.append(Data(count: Int(pad)))
         }
+        guard sendAll(fd, first) else { Darwin.close(fd); return }
 
         let client = Client(fd: fd)
         clientsLock.lock(); clients.append(client); clientsLock.unlock()
-        os_log("클라이언트 접속 (총 %d)", log: log, type: .info, clientCount)
+        os_log("청취자 접속 %{public}@ (총 %d)%{public}@", log: log, type: .info,
+               peer, clientCount, range != nil ? " range=206" : "")
 
         while running {
             guard let chunk = client.pop() else { break }
@@ -144,7 +245,8 @@ final class StreamServer {
 
         clientsLock.lock(); clients.removeAll { $0 === client }; clientsLock.unlock()
         client.close()
-        os_log("클라이언트 종료 (남은 %d)", log: log, type: .info, clientCount)
+        Darwin.close(fd)
+        os_log("청취자 나감 (남은 %d)", log: log, type: .info, clientCount)
     }
 
     /// 모든 클라이언트에게 뿌린다. 막힌 클라이언트가 있어도 여기서 기다리지 않는다.
@@ -155,27 +257,68 @@ final class StreamServer {
         for c in snapshot { c.push(data) }
     }
 
-    func stop() {
-        running = false
+    /// 스트림은 바로 끊고, 서버는 `farewell` 초 동안 남아 모든 요청에 410 으로 답한다.
+    /// 청취자 페이지는 끊기면 /check 를 물어본다 — 이게 없으면 "호스트가 껐다" 와
+    /// "Wi-Fi 가 끊겼다" 를 구분 못 하고 영원히 재접속만 한다.
+    func stop(farewell: TimeInterval) {
+        ended = true
         clientsLock.lock(); let snapshot = clients; clients = []; clientsLock.unlock()
         for c in snapshot { c.close() }
-        if listenFd >= 0 { Darwin.close(listenFd); listenFd = -1 }
+        if farewell > 0 { Thread.sleep(forTimeInterval: farewell) }
+        running = false
+        if listenFd >= 0 { Darwin.shutdown(listenFd, SHUT_RDWR); Darwin.close(listenFd); listenFd = -1 }
         os_log("HTTP 서버 종료", log: log, type: .info)
+    }
+
+    // ── 비밀번호 ── 안드로이드 checkPw 와 같은 규칙. 0 이면 통과, 아니면 HTTP 상태 코드.
+    private func checkPw(_ peer: String, _ given: String) -> Int {
+        if roomPw.isEmpty { return 0 }
+        pwLock.lock(); defer { pwLock.unlock() }
+        // 맞는 비밀번호는 지연보다 먼저 통과시킨다. 오타 직후 바로 고쳐 친 사람을 막지 않게.
+        if given == roomPw { pwFails[peer] = nil; return 0 }
+        let now = Date()
+        if let st = pwFails[peer] {
+            if st.0 >= Self.pwMaxFails || now < st.1 { return 429 }
+        }
+        // 첫 실패엔 지연이 없다. 페이지가 실패 직후 /check 로 이유를 되묻기 때문이다.
+        let fails = (pwFails[peer]?.0 ?? 0) + 1
+        let wait = fails <= 1 ? 0 : min(Double(1 << min(fails - 2, 3)), 8)
+        pwFails[peer] = (fails, now.addingTimeInterval(wait))
+        return 401
+    }
+
+    private func writeDenied(_ fd: Int32, _ code: Int) {
+        if code == 401 {
+            reply(fd, "401 Unauthorized", "text/plain; charset=utf-8", Data("비밀번호가 맞지 않습니다.".utf8))
+        } else {
+            reply(fd, "429 Too Many Requests", "text/plain; charset=utf-8",
+                  Data("시도가 너무 많습니다. 잠시 후 다시 해주세요.".utf8))
+        }
     }
 
     // ── 유틸 ──────────────────────────────────────────────────
 
+    private func reply(_ fd: Int32, _ status: String, _ type: String?, _ body: Data?) {
+        var head = "HTTP/1.1 \(status)\r\n"
+        if let type { head += "Content-Type: \(type)\r\n" }
+        if let body { head += "Content-Length: \(body.count)\r\n" }
+        head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+        var d = Data(head.utf8)
+        if let body { d.append(body) }
+        sendAll(fd, d)
+        Darwin.close(fd)
+    }
+
     private func readRequest(_ fd: Int32) -> String? {
-        var buf = [UInt8](repeating: 0, count: 2048)
+        var buf = [UInt8](repeating: 0, count: 4096)
         var total = 0
         while total < buf.count {
-            let n = recv(fd, &buf[total], buf.count - total, 0)
+            let n = buf.withUnsafeMutableBytes { recv(fd, $0.baseAddress! + total, $0.count - total, 0) }
             if n <= 0 { break }
             total += n
-            if let s = String(bytes: buf[0..<total], encoding: .utf8),
-               s.contains("\r\n\r\n") { return s }
+            if let s = String(bytes: buf[0..<total], encoding: .utf8), s.contains("\r\n\r\n") { return s }
         }
-        return total > 0 ? String(bytes: buf[0..<total], encoding: .utf8) : nil
+        return total > 0 ? String(decoding: buf[0..<total], as: UTF8.self) : nil
     }
 
     private func requestPath(_ req: String) -> String {
@@ -184,14 +327,41 @@ final class StreamServer {
         return parts.count >= 2 ? String(parts[1]) : "/"
     }
 
+    private func param(_ path: String, _ key: String) -> String? {
+        URLComponents(string: "http://x" + path)?.queryItems?.first(where: { $0.name == key })?.value
+    }
+
+    /// `Range: bytes=시작-끝` → (시작, 끝). 끝이 없으면 -1.
+    private func parseRange(_ req: String) -> (Int64, Int64)? {
+        for line in req.components(separatedBy: "\r\n") {
+            guard let c = line.firstIndex(of: ":"),
+                  line[..<c].trimmingCharacters(in: .whitespaces).lowercased() == "range" else { continue }
+            var v = line[line.index(after: c)...].trimmingCharacters(in: .whitespaces).lowercased()
+            guard v.hasPrefix("bytes=") else { return nil }
+            v.removeFirst(6)
+            if let comma = v.firstIndex(of: ",") { v = String(v[..<comma]) }
+            guard let dash = v.firstIndex(of: "-") else { return nil }
+            let a = v[..<dash].trimmingCharacters(in: .whitespaces)
+            let b = v[v.index(after: dash)...].trimmingCharacters(in: .whitespaces)
+            if a.isEmpty { return (0, -1) }
+            guard let s = Int64(a) else { return nil }
+            return (s, b.isEmpty ? -1 : (Int64(b) ?? -1))
+        }
+        return nil
+    }
+
+    private func escapeHTML(_ t: String) -> String {
+        t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
     @discardableResult
     private func sendAll(_ fd: Int32, _ data: Data) -> Bool {
         return data.withUnsafeBytes { raw -> Bool in
-            guard let base = raw.baseAddress else { return false }
+            guard let base = raw.baseAddress else { return true }
             var sent = 0
             while sent < raw.count {
-                // SIGPIPE 로 프로세스가 죽지 않게 MSG_NOSIGNAL 대신 SO_NOSIGPIPE 를
-                // 못 쓰는 상황이라 send 반환값으로만 판단한다.
                 let n = send(fd, base.advanced(by: sent), raw.count - sent, 0)
                 if n <= 0 { return false }
                 sent += n
@@ -217,20 +387,5 @@ final class StreamServer {
         u16(UInt16(PCMFormat.bits))
         d.append(contentsOf: Array("data".utf8)); u32(0xFFFF_FFFF)
         return d
-    }
-
-    private var indexPage: String {
-        let body = """
-        <!doctype html><meta charset=utf-8>
-        <meta name=viewport content="width=device-width,initial-scale=1">
-        <title>같이 듣기</title>
-        <style>body{font:16px -apple-system,sans-serif;text-align:center;padding:3rem 1rem}
-        audio{width:100%;max-width:420px;margin-top:2rem}</style>
-        <h2>같이 듣기</h2>
-        <p>재생을 누르면 호스트의 소리가 들립니다.</p>
-        <audio controls autoplay playsinline src="/stream"></audio>
-        """
-        return "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
-            + "Content-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body
     }
 }
