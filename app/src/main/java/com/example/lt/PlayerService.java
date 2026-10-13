@@ -290,6 +290,21 @@ public class PlayerService extends Service {
                     running = false;
                     break;
                 }
+                if (status == 410) {
+                    // 호스트가 공유를 끄면서 직접 보낸 작별 인사다. 연결이 돼야만 받을 수 있는
+                    // 답이라 Wi-Fi 흔들림과 헷갈릴 일이 없다 — 기다리지 않고 바로 끝낸다.
+                    // 이걸 못 읽던 시절엔 본문을 WAV 헤더로 읽다 실패해 2분을 재시도했다.
+                    Log.i(TAG, "player 포기: 호스트가 공유를 종료 (410)");
+                    endedReason = "호스트가 공유를 종료했어요";
+                    closeSock();
+                    running = false;
+                    stopSelf();
+                    break;
+                }
+                if (status != 200) {
+                    // 본문을 소리 형식으로 읽으면 안 된다. 모르는 답은 그냥 실패로 치고 다시 붙는다.
+                    throw new Exception("unexpected status " + status);
+                }
 
                 // WAV 헤더를 버리지 않고 읽어서 **호스트가 실제로 보내는 샘플레이트**를
                 // 쓴다. 44100 을 박아두면 호스트만 48000 으로 올렸을 때 소리가 느려지고,
