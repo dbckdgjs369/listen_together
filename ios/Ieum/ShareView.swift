@@ -1,3 +1,4 @@
+import CoreImage.CIFilterBuiltins
 import ReplayKit
 import SwiftUI
 
@@ -23,6 +24,7 @@ struct ShareView: View {
     @AppStorage("roomName") private var roomName = ""
     @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var copied = false
+    @State private var showQR = false
 
     var body: some View {
         ScrollView {
@@ -35,6 +37,10 @@ struct ShareView: View {
         }
         .onAppear(perform: poll)
         .onReceive(timer) { _ in poll() }
+        // 화면이 잠기면 iOS 가 화면 방송을 끊는다 — 공유도 같이 꺼진다(실측). 이 화면을
+        // 띄워 둔 동안이라도 자동 잠금을 막는다. 다른 앱으로 가면 iOS 가 다시 잠근다.
+        .onChange(of: info != nil) { live in UIApplication.shared.isIdleTimerDisabled = live }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }
 
     private var startCard: some View {
@@ -86,21 +92,34 @@ struct ShareView: View {
             }
             .padding(.vertical, 4)
 
-            Button(copied ? "복사했어요" : "초대 링크 복사") {
-                UIPasteboard.general.string = RoomCodeSite.link(code: code)
-                copied = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+            HStack(spacing: 10) {
+                Button(copied ? "복사했어요" : "초대 링크 복사") {
+                    UIPasteboard.general.string = RoomCodeSite.link(code: code)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                }
+                .buttonStyle(PrimaryButton())
+                Button("QR 보기") { showQR = true }
+                    .buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
             }
-            .buttonStyle(PrimaryButton())
+            .sheet(isPresented: $showQR) { QRSheet(code: code, pw: info.pw) }
+            // 방송은 확장만 끝낼 수 있다. 시스템 방송 버튼은 공유 중엔 눌러도 창이 안 떠서(실측),
+            // 확장 서버에 /stop 을 보내 스스로 끝내게 한다.
+            Button("공유 중지") {
+                MiniHTTP.get(host: "127.0.0.1", path: "/stop", timeout: 1) { _ in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { poll() }
+                }
+            }
+            .buttonStyle(PrimaryButton(color: Theme.danger))
 
             Text("친구는 이음 앱의 '방 코드'에 넣거나, 브라우저로 \(RoomCodeSite.url) 에서 코드를 넣으면 돼요.")
                 .font(.system(size: 12)).foregroundStyle(Theme.dim)
             ForEach(info.addrs, id: \.self) { a in
-                Text("http://\(a):\(LTPort.stream)/?pw=\(info.pw)")
+                Text(verbatim: "http://\(a):\(LTPort.stream)/?pw=\(info.pw)")
                     .font(.system(size: 11).monospaced()).foregroundStyle(Theme.faint)
                     .textSelection(.enabled)
             }
-            Text("끄려면 화면 위 빨간 표시(또는 제어 센터의 화면 기록 버튼)를 눌러 '중단'하세요.")
+            Text("화면이 잠기면 공유가 꺼져요. 이 화면을 띄워 두면 잠기지 않아요.")
                 .font(.system(size: 12)).foregroundStyle(Theme.faint)
         }
     }
@@ -110,6 +129,7 @@ struct ShareView: View {
             Text("알아 두세요").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
             VStack(alignment: .leading, spacing: 6) {
                 bullet("음악 앱을 먼저 재생해 두면 바로 들려요.")
+                bullet("화면이 잠기면 아이폰이 방송을 끊어요. 공유하는 동안은 화면을 켜 두세요.")
                 bullet("화면은 보내지 않아요. 아이폰이 '화면 방송'을 통해서만 다른 앱 소리를 내주기 때문에 녹화 표시가 떠요.")
                 bullet("Apple Music 등 일부 앱은 저작권 보호로 소리가 안 잡힐 수 있어요.")
                 bullet("친구와 같은 Wi-Fi 이거나, 친구가 내 개인용 핫스팟에 연결해야 해요.")
@@ -139,6 +159,43 @@ struct ShareView: View {
             }
             DispatchQueue.main.async { if info != next { info = next } }
         }
+    }
+}
+
+/// 친구 폰 카메라로 찍게 하는 초대 QR. 내용은 '초대 링크 복사'와 같은 `#코드` 링크다(안드로이드와 같다).
+struct QRSheet: View {
+    let code: String
+    let pw: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("QR 로 들어오기").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
+            Text("같은 Wi-Fi 에 있는 폰 카메라로 찍으면 바로 들어와요")
+                .font(.system(size: 13)).foregroundStyle(Theme.dim).multilineTextAlignment(.center)
+            if let img = Self.image(RoomCodeSite.link(code: code)) {
+                // 흰 바탕·여백이 있어야 카메라가 잘 읽는다. 어두운 테마 위에 그대로 두면 못 읽는 폰이 있다.
+                Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
+                    .padding(14).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                    .frame(maxWidth: 280)
+            }
+            Text("방 코드 \(code)  ·  비밀번호 \(pw)")
+                .font(.system(size: 14, weight: .semibold).monospaced()).foregroundStyle(Theme.dim)
+            Button("닫기") { dismiss() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.bg)
+        .presentationDetents([.medium, .large])
+    }
+
+    static func image(_ text: String) -> UIImage? {
+        let f = CIFilter.qrCodeGenerator()
+        f.message = Data(text.utf8)
+        f.correctionLevel = "M"
+        guard let out = f.outputImage,
+              let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
+        return UIImage(cgImage: cg)
     }
 }
 
