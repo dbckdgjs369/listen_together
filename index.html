@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#07080C">
-<title>이음</title>
+<title>IEUM</title>
 <link rel="manifest" href="manifest.webmanifest">
 <!-- 호스트 핫스팟에서 오프라인으로도 떠야 하므로 글꼴·그림은 밖에서 받지 않는다 -->
 <style>
@@ -81,35 +81,48 @@ details b{color:var(--text);font-weight:600}
 </head>
 <body>
   <div class="aura"><i class="a1"></i><i class="a2"></i><i class="a3"></i></div><div class="grain"></div>
-  <header class="top"><div class="brand">이음<span class="seal" aria-hidden="true">音</span></div></header>
+  <header class="top"><div class="brand"><span data-i18n="app_name"></span><span class="seal" aria-hidden="true">音</span></div></header>
   <main>
-    <p class="eyebrow">소리를 잇다</p>
-    <h1>같은 소리로,<br><em>함께 이어지는 순간</em></h1>
-    <p class="lead">호스트 화면에 뜬 방 코드를 입력하면 이 브라우저에서 바로 같이 들을 수 있어요.</p>
+    <p class="eyebrow" data-i18n="eyebrow"></p>
+    <h1><span data-i18n="h1_line1"></span><br><em data-i18n="h1_em"></em></h1>
+    <p class="lead" data-i18n="lead"></p>
     <svg class=strands viewBox="0 0 360 64" preserveAspectRatio="none" aria-hidden=true><defs><linearGradient id=g1 x1=0 x2=1><stop offset=0 stop-color="#6C5CE7" stop-opacity="0"/><stop offset=".5" stop-color="#9D90FF"/><stop offset="1" stop-color="#6C5CE7" stop-opacity="0"/></linearGradient><linearGradient id=g2 x1=0 x2=1><stop offset=0 stop-color="#3DDC97" stop-opacity="0"/><stop offset=".5" stop-color="#3DDC97"/><stop offset="1" stop-color="#3DDC97" stop-opacity="0"/></linearGradient></defs><g class=s1><path d="M-120 32 c30 -22 30 -22 60 0 s30 22 60 0 c30 -22 30 -22 60 0 s30 22 60 0 c30 -22 30 -22 60 0 s30 22 60 0 c30 -22 30 -22 60 0 s30 22 60 0 c30 -22 30 -22 60 0 s30 22 60 0 c30 -22 30 -22 60 0 s30 22 60 0 c30 -22 30 -22 60 0 s30 22 60 0 c30 -22 30 -22 60 0 s30 22 60 0" stroke="url(#g1)"/></g><g class=s2><path d="M-60 32 c30 -14 30 -14 60 0 s30 14 60 0 c30 -14 30 -14 60 0 s30 14 60 0 c30 -14 30 -14 60 0 s30 14 60 0 c30 -14 30 -14 60 0 s30 14 60 0 c30 -14 30 -14 60 0 s30 14 60 0 c30 -14 30 -14 60 0 s30 14 60 0 c30 -14 30 -14 60 0 s30 14 60 0 c30 -14 30 -14 60 0 s30 14 60 0" stroke="url(#g2)"/></g></svg>
     <div class="glass card">
       <input id="c" autocomplete="off" autocapitalize="characters" spellcheck="false"
-             maxlength="14" placeholder="방 코드 입력" aria-label="방 코드">
+             maxlength="14" data-i18n-placeholder="code_placeholder" data-i18n-aria="code_label">
       <div id="s"></div>
-      <button id="b" class="btn">입장하기</button>
+      <button id="b" class="btn" data-i18n="join"></button>
     </div>
 
-    <details class="glass">
-      <summary>안 들어가져요</summary>
+    <details class="glass" id="help">
+      <summary data-i18n="help_title"></summary>
       <ul>
-        <li>호스트 폰과 <b>같은 Wi-Fi</b>(또는 호스트 핫스팟)에 붙어 있어야 해요.</li>
-        <li>맥 Chrome 에서 "연결할 수 없음"이 뜨면
-          <b>시스템 설정 → 개인정보 보호 및 보안 → 로컬 네트워크</b>에서 Chrome 을 켜고
-          다시 시작하세요. Safari 는 설정 없이 돼요.</li>
-        <li>호스트가 공유를 다시 시작하면 코드가 바뀌어요.</li>
+        <li data-i18n-html="help_same_wifi_html"></li>
+        <li data-i18n-html="help_public_wifi_html"></li>
+        <li data-i18n-html="help_mac_chrome_html"></li>
+        <li data-i18n="help_new_code"></li>
       </ul>
     </details>
   </main>
 
 <!-- ?v= 는 roomcode.js 를 고칠 때마다 올린다. GitHub Pages 가 파일을 10분씩 캐시하게 해서,
      주소가 같으면 새 페이지가 옛 규칙으로 코드를 풀어 "코드가 맞지 않아요" 가 뜬다 -->
+<!-- 문구는 i18n.js 에 있다(i18n/ 에서 생성). 고칠 때마다 ?v= 를 올린다 — 위와 같은 이유 -->
+<script src="i18n.js?v=1"></script>
 <script src="roomcode.js?v=2"></script>
 <script>
+  // 브라우저 언어로 문구를 채운다. 화면이 그려지기 전에 끝나도록 본문 맨 끝에서 바로 돈다.
+  document.documentElement.lang = LANG;
+  document.title = t('app_name');
+  function fill(attr, put) {
+    var els = document.querySelectorAll('[' + attr + ']');
+    for (var i = 0; i < els.length; i++) put(els[i], t(els[i].getAttribute(attr)));
+  }
+  fill('data-i18n', function (el, v) { el.textContent = v; });
+  fill('data-i18n-html', function (el, v) { el.innerHTML = v; });   // 우리 문구뿐이라 innerHTML 이 안전하다
+  fill('data-i18n-placeholder', function (el, v) { el.placeholder = v; });
+  fill('data-i18n-aria', function (el, v) { el.setAttribute('aria-label', v); });
+
   var c = document.getElementById('c'), b = document.getElementById('b'), s = document.getElementById('s');
 
   function say(msg, bad) { s.textContent = msg; s.className = c.className = bad ? 'bad' : ''; }
@@ -118,9 +131,24 @@ details b{color:var(--text);font-weight:600}
   // 그래서 확인 없이 **페이지 자체를 이동**시킨다. 최상위 이동은 막히지 않는다.
   function go() {
     var r = RoomCode.decode(c.value);
-    if (!r) { say('코드가 맞지 않아요 — 다시 확인해 주세요', true); c.focus(); return; }
-    say('연결 중… (' + r.ip + ')');
+    if (!r) { say(t('bad_code'), true); c.focus(); return; }
+    say(t('connecting', { ip: r.ip }));
+    try { sessionStorage.setItem(TRIED, String(Date.now())); } catch (e) {}
     location.href = r.url;
+  }
+
+  // 입장을 눌렀는데 금방 이 페이지로 돌아왔다면 호스트에 못 닿은 것이다(브라우저 오류 화면에서
+  // 뒤로 가기). 이 페이지는 https 라 미리 떠볼 수가 없어서, 돌아온 걸 보고서야 안다.
+  // 이때는 안내를 펼쳐 주고, 링크(#코드)로 들어왔어도 다시 자동 이동하지 않는다 —
+  // 그러면 오류 화면과 이 페이지 사이를 계속 튕긴다.
+  var TRIED = 'lt-tried', BACK_MS = 3 * 60 * 1000;
+  function cameBack() {
+    var t = 0;
+    try { t = Number(sessionStorage.getItem(TRIED)) || 0; sessionStorage.removeItem(TRIED); } catch (e) {}
+    if (!t || Date.now() - t > BACK_MS) return false;
+    say(t('came_back'), true);
+    document.getElementById('help').open = true;
+    return true;
   }
 
   b.onclick = go;
@@ -129,7 +157,11 @@ details b{color:var(--text);font-weight:600}
 
   // 링크로 받은 경우(…/#K7Q2F9A) 바로 넘어간다. 해시는 서버로 안 가므로 호스팅 쪽 로그에도 안 남는다.
   var h = decodeURIComponent(location.hash.slice(1));
-  if (h) { c.value = h; go(); } else { c.focus(); }
+  if (h) c.value = h;
+  if (cameBack()) { /* 안내만 띄우고 기다린다 */ }
+  else if (h) go(); else c.focus();
+  // 뒤로 가기가 저장된 페이지(bfcache)를 그대로 꺼내 오면 위 코드가 다시 안 돈다.
+  window.addEventListener('pageshow', function (e) { if (e.persisted) cameBack(); });
 
   // 한 번 열어두면 인터넷이 없어도(호스트 핫스팟만 켠 상태) 이 페이지가 뜬다.
   if ('serviceWorker' in navigator) {
