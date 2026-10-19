@@ -12,7 +12,7 @@ import os
 class SampleHandler: RPBroadcastSampleHandler {
 
     private let converter = PCMConverter()
-    private let server = StreamServer(roomName: "아이폰의 방")
+    private let server = StreamServer(roomName: L.extDefaultRoom)
     private let beacon = Beacon()
     private let repair = SparseRepair()
     /// 실제 시간에 맞춰 내보낸다. 서버로 바로 흘리지 않고 이걸 거친다(Pacer.swift).
@@ -35,7 +35,7 @@ class SampleHandler: RPBroadcastSampleHandler {
                 guard let self else { return }
                 self.shutdown(farewell: 2)
                 let e = NSError(domain: "io.github.dbckdgjs369.ieum", code: 0,
-                                userInfo: [NSLocalizedDescriptionKey: "공유를 중지했어요."])
+                                userInfo: [NSLocalizedDescriptionKey: L.extStopped])
                 self.finishBroadcastWithError(e)
             }
         }

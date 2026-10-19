@@ -488,8 +488,8 @@ final class Player: ObservableObject {
 
     private func updateNowPlaying() {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
-            MPMediaItemPropertyTitle: roomName.isEmpty ? "이음" : roomName,
-            MPMediaItemPropertyArtist: "이음 · 같이 듣는 중",
+            MPMediaItemPropertyTitle: roomName.isEmpty ? L.appName : roomName,
+            MPMediaItemPropertyArtist: L.nowPlayingArtist,
             MPNowPlayingInfoPropertyIsLiveStream: true,
             MPNowPlayingInfoPropertyPlaybackRate: state == .playing ? 1.0 : 0.0,
         ]

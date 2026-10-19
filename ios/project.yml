@@ -4,6 +4,8 @@ options:
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
+  # 기본 언어는 영어. 번역이 없는 언어(일본어 등)는 영어로 뜬다. 문구는 저장소 루트 i18n/ 에서 생성한다.
+  developmentLanguage: en
 
 settings:
   base:
@@ -25,7 +27,8 @@ targets:
     info:
       path: Ieum/Info.plist
       properties:
-        CFBundleDisplayName: 이음
+        # 언어별 값은 Ieum/<언어>.lproj/InfoPlist.strings (i18n/ 에서 생성). 여기는 기본(영어)값이다.
+        CFBundleDisplayName: IEUM
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen:
@@ -35,7 +38,7 @@ targets:
         # 화면을 꺼도 계속 들리게. 안드로이드의 포그라운드 서비스 역할이다.
         UIBackgroundModes: [audio]
         # 같은 Wi-Fi 의 방을 찾고 붙으려면 로컬 네트워크 권한이 필요하다. 권한 창 문구이기도 하다.
-        NSLocalNetworkUsageDescription: 같은 Wi-Fi 에 있는 친구의 방을 찾고, 친구와 소리를 주고받으려면 로컬 네트워크 접근이 필요해요.
+        NSLocalNetworkUsageDescription: Local network access is needed to find friends' rooms on the same Wi-Fi and to share sound with them.
         CFBundleURLTypes:
           - CFBundleURLName: io.github.dbckdgjs369.ieum
             CFBundleURLSchemes: [ieum]
@@ -71,10 +74,10 @@ targets:
     info:
       path: LTBroadcast/Info.plist
       properties:
-        CFBundleDisplayName: 이음
+        CFBundleDisplayName: IEUM
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSLocalNetworkUsageDescription: 같은 Wi-Fi 에 있는 친구에게 소리를 보내려면 로컬 네트워크 접근이 필요해요.
+        NSLocalNetworkUsageDescription: Local network access is needed to send sound to friends on the same Wi-Fi.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler

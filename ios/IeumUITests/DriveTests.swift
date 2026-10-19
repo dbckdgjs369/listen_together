@@ -119,6 +119,87 @@ final class DriveTests: XCTestCase {
         stamp("end")
     }
 
+    /// 언어별 화면을 남긴다(다국어 확인용). 기기 언어와 상관없이 앱만 그 언어로 띄운다.
+    /// 결과 묶음(.xcresult)의 첨부 파일에 en-listen, ko-share … 이 쌓인다.
+    func testLocalizedScreens() {
+        for lang in ["en", "ko"] {
+            ieum.terminate()
+            ieum.launchArguments = ["-AppleLanguages", "(\(lang))", "-AppleLocale", lang]
+            ieum.launch()
+            sleep(2); mark("\(lang)-listen")
+            ieum.segmentedControls.buttons.element(boundBy: 1).tap()
+            sleep(1); mark("\(lang)-share")
+            ieum.swipeUp()
+            sleep(1); mark("\(lang)-share-tips")
+        }
+        ieum.terminate()
+        ieum.launchArguments = []
+    }
+
+    /// 영어로 띄워 공유 ▸ 공유 중 화면 ▸ 화면 잠금 ▸ 해제 ▸ 청취 페이지 언어별 응답 ▸ 공유 중지.
+    /// 청취 페이지는 같은 폰의 127.0.0.1 로 Accept-Language 만 바꿔 받아 본다(맥과 망이 달라도 된다).
+    func testShareLocalized() {
+        ieum.terminate()
+        ieum.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en"]
+        ieum.launch()
+        defer { ieum.launchArguments = [] }
+        ieum.segmentedControls.buttons.element(boundBy: 1).tap()
+        let start = ieum.staticTexts["Start sharing"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5), "이미 공유 중이거나 화면이 다르다")
+        start.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        tapSystemButton(["방송 시작", "공유 시작", "Start Broadcast"])
+        sleep(4)
+        ieum.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        XCTAssertTrue(ieum.staticTexts["Room code"].waitForExistence(timeout: 15), "공유 중 화면으로 안 바뀜")
+        sleep(1); mark("en-live")
+        ieum.swipeUp()
+        sleep(1); mark("en-live-bottom")
+
+        ieum.buttons["Lock screen"].tap()
+        let hint = ieum.staticTexts["Press and hold to unlock"]
+        XCTAssertTrue(hint.waitForExistence(timeout: 5), "잠금 화면이 안 뜸")
+        ieum.tap()   // 살짝 밝혀서 보이게
+        sleep(1); mark("en-lock")
+        // 해제 버튼은 안내 글 바로 위에 있다.
+        hint.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: -70))
+            .press(forDuration: 2.5)
+        XCTAssertTrue(ieum.buttons["Stop sharing"].waitForExistence(timeout: 5), "잠금이 안 풀림")
+
+        var report = ""
+        for (lang, expect) in [("en-US,en;q=0.9", "You&#39;re invited to"), ("ko-KR,ko;q=0.9", "초대받은 방"),
+                               ("ja-JP", "You&#39;re invited to")] {
+            let html = fetch("http://127.0.0.1:7980/", lang: lang) ?? ""
+            let ok = html.contains(expect) && html.contains("var T={")
+            report += "\(ok ? "OK  " : "FAIL") [\(lang)] \(expect)\n"
+            XCTAssertTrue(ok, "청취 페이지 언어가 틀림: \(lang)")
+        }
+        for (i, lang) in ["en", "ko"].enumerated() {
+            if i > 0 { sleep(2) }   // 연속 실패는 잠시 막히므로(429) 사이를 둔다
+            report += "[\(lang)] /check 틀린 비밀번호 → \(fetch("http://127.0.0.1:7980/check?pw=0000", lang: lang) ?? "nil")\n"
+        }
+        print(report)
+        let a = XCTAttachment(string: report); a.name = "page-report"; a.lifetime = .keepAlways; add(a)
+
+        ieum.buttons["Stop sharing"].tap()
+        XCTAssertTrue(ieum.staticTexts["Start sharing"].waitForExistence(timeout: 10), "공유가 안 꺼짐")
+        sleep(1); mark("en-stopped")
+        for app in [ieum, springboard] { for l in ["확인", "OK", "닫기"] where app.buttons[l].exists { app.buttons[l].tap() } }
+    }
+
+    /// 같은 폰의 서버에 Accept-Language 를 붙여 GET. 본문을 돌려준다.
+    private func fetch(_ url: String, lang: String) -> String? {
+        var req = URLRequest(url: URL(string: url)!, timeoutInterval: 5)
+        req.setValue(lang, forHTTPHeaderField: "Accept-Language")
+        let done = DispatchSemaphore(value: 0)
+        var body: String?
+        URLSession.shared.dataTask(with: req) { d, _, _ in
+            body = d.flatMap { String(data: $0, encoding: .utf8) }
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 6)
+        return body
+    }
+
     /// 화면을 남기며 이름에 시각을 붙인다.
     private func mark(_ name: String) {
         let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())

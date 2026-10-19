@@ -51,8 +51,10 @@ minSdk 29 (AudioPlaybackCapture 요구), targetSdk 36.
 |---|---|
 | `common.*` | 전부 |
 | `android.*` | `app/src/main/res/values*/strings.xml` |
-| `page.*` | `app/src/main/assets/page/<언어>.json` — 호스트가 띄우는 청취 페이지. 요청의 `Accept-Language` 로 고른다 |
+| `page.*` | `app/src/main/assets/page/<언어>.json`, `ios/LTBroadcast/PageText.swift` — 호스트가 띄우는 청취 페이지. 요청의 `Accept-Language` 로 고른다 |
 | `site.*` | `site/i18n.js` — 방 코드 페이지. 브라우저 언어로 고른다 |
+| `ios.*` | `ios/LTShared/L.swift` + `ios/LTShared/<언어>.lproj/Localizable.strings` (앱·방송 확장 공용) |
+| `iosplist.app.*` / `iosplist.ext.*` | 아이폰 앱 / 방송 확장의 `<언어>.lproj/InfoPlist.strings` (홈 화면 이름, 권한 안내) |
 
 - **기준은 영어(`en.json`)다.** 번역이 없는 언어·키는 영어로 나간다.
 - 빈칸은 `{이름}`. 안드로이드에서는 `en` 에 나온 순서대로 `getString(id, …)` 인자가 된다(생성된 `strings.xml` 주석 참고).

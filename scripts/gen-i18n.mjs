@@ -10,12 +10,15 @@
  * · en.json 이 기준이다. 키 목록·빈칸 이름은 en 을 따르고, 다른 언어에 없는 키는 영어로 나간다.
  *   기본 언어를 영어로 두는 이유: 번역이 없는 언어(일본어 등) 사용자에게 한글보다 영어가 낫다.
  * · 키 앞머리가 어디로 나갈지를 정한다.
- *     common.*  모든 곳          android.*  안드로이드 앱
- *     page.*    호스트가 띄우는 청취 웹페이지(앱이 직접 서빙)
+ *     common.*  모든 곳          android.*  안드로이드 앱      ios.*  아이폰 앱·방송 확장
+ *     iosplist.app.* / iosplist.ext.*  아이폰 앱 / 방송 확장의 Info.plist 값(홈 화면 이름, 권한 안내)
+ *     page.*    호스트가 띄우는 청취 웹페이지(안드로이드·아이폰이 직접 서빙)
  *     site.*    방 코드 입력 페이지(site/, GitHub Pages)
  * · 빈칸은 {이름}. 안드로이드로 나갈 땐 en 에 처음 나온 순서대로 %1$s, %2$s … 가 된다 —
  *   코드에서 getString(id, …) 에 넘기는 순서도 그 순서다. 생성된 strings.xml 주석에 적어 둔다.
+ *   iOS 는 같은 순서로 %1$@, %2$@ … 가 되고, 생성된 L.swift 의 함수 인자 이름이 빈칸 이름이다.
  * · 개수에 따라 말이 바뀌면 {"one": "...", "other": "..."} 로 적는다. 빈칸 {n} 이 개수다.
+ *   (안드로이드 전용. iOS·웹은 "Listeners: {n}" 처럼 개수형이 필요 없는 문장으로 쓴다.)
  * · 키 끝이 _html 이면 웹에서 innerHTML 로 넣는 문구다(<b> 정도만 쓴다).
  */
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
@@ -53,8 +56,11 @@ function slots(v) {
 }
 
 for (const [key, v] of Object.entries(base)) {
-  if (!/^(common|android|page|site)\.[a-z0-9_.]+$/.test(key)) fail(`키 이름이 규칙에 안 맞는다: ${key}`);
+  if (!/^(common|android|ios|page|site)\.[a-z0-9_.]+$/.test(key) && !/^iosplist\.(app|ext)\.[a-z_]+$/.test(key)) {
+    fail(`키 이름이 규칙에 안 맞는다: ${key}`);
+  }
   if (typeof v !== 'string' && typeof v?.other !== 'string') fail(`${key}: 복수형에는 other 가 있어야 한다`);
+  if (typeof v !== 'string' && !key.startsWith('android.')) fail(`${key}: 복수형은 android.* 에만 쓴다`);
 }
 let missing = 0;
 for (const l of langs.slice(1)) {
@@ -174,5 +180,93 @@ function t(key, args) {
   return String(v).replace(/\\{(\\w+)\\}/g, function (m, k) { return args && k in args ? args[k] : m; });
 }
 `);
+
+// ── iOS: Localizable.strings + L.swift(타입 있는 접근자) + InfoPlist.strings + 청취 페이지 문구 ──
+//
+// 문구 파일과 L.swift 는 LTShared 에 둔다. 앱과 방송 확장이 둘 다 이 폴더를 소스로 쓰므로
+// 한 벌이 양쪽 번들에 들어간다(project.yml).
+
+const IOS = ['common', 'ios'];
+const camel = s => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+
+function stringsText(s, order) {
+  let t = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  if (order.length) {
+    t = t.replace(/%/g, '%%');
+    t = t.replace(/\{(\w+)\}/g, (_, n) => `%${order.indexOf(n) + 1}$@`);
+  }
+  return t;
+}
+
+const baseIos = pick(BASE, IOS);
+for (const lang of langs) {
+  const lines = [`/* ${HEADER} */`];
+  for (const [name, v] of Object.entries(pick(lang, IOS))) {
+    lines.push(`"${name}" = "${stringsText(v, slots(baseIos[name]))}";`);
+  }
+  write(`ios/LTShared/${lang}.lproj/Localizable.strings`, lines.join('\n') + '\n');
+}
+
+const swift = [
+  `// ${HEADER}`,
+  'import Foundation',
+  '',
+  '/// 화면 문구. 키가 빠지거나 빈칸이 바뀌면 컴파일에서 걸린다 — 문자열 키를 손으로 치지 않는다.',
+  '/// 주석은 영어 원문이다.',
+  'enum L {',
+];
+for (const [name, v] of Object.entries(baseIos)) {
+  const order = slots(v);
+  swift.push(`    /// ${v.replace(/\n/g, ' ')}`);
+  if (!order.length) {
+    swift.push(`    static var ${camel(name)}: String { tr("${name}") }`);
+  } else {
+    const params = order.map(n => `${camel(n)}: Any`).join(', ');
+    swift.push(`    static func ${camel(name)}(${params}) -> String { tr("${name}", ${order.map(camel).join(', ')}) }`);
+  }
+}
+swift.push(
+  '',
+  '    private static func tr(_ key: String, _ args: Any...) -> String {',
+  '        let format = NSLocalizedString(key, comment: "")',
+  '        return args.isEmpty ? format : String(format: format, arguments: args.map { String(describing: $0) })',
+  '    }',
+  '}',
+  '',
+);
+write('ios/LTShared/L.swift', swift.join('\n'));
+
+// Info.plist 값은 키 이름이 정해져 있다. 여기 없는 이름은 오타로 본다.
+const PLIST = { display_name: 'CFBundleDisplayName', local_network: 'NSLocalNetworkUsageDescription' };
+const PLIST_DIR = { app: 'ios/Ieum', ext: 'ios/LTBroadcast' };
+for (const lang of langs) {
+  const src = { ...base, ...dict[lang] };
+  for (const [target, dir] of Object.entries(PLIST_DIR)) {
+    const lines = [`/* ${HEADER} */`];
+    for (const [key, v] of Object.entries(src)) {
+      if (!key.startsWith(`iosplist.${target}.`)) continue;
+      const name = key.slice(`iosplist.${target}.`.length);
+      if (!PLIST[name]) fail(`${key}: 모르는 Info.plist 항목 (${Object.keys(PLIST).join(', ')} 중 하나)`);
+      lines.push(`"${PLIST[name]}" = "${stringsText(v, [])}";`);
+    }
+    write(`${dir}/${lang}.lproj/InfoPlist.strings`, lines.join('\n') + '\n');
+  }
+}
+
+// 방송 확장이 서빙하는 청취 페이지 — 안드로이드 assets/page/*.json 과 같은 내용이다.
+const pageSwift = [
+  `// ${HEADER}`,
+  '',
+  '/// 청취 페이지 문구(언어별 JSON). Server.swift 가 요청의 Accept-Language 로 고른다.',
+  'enum PageText {',
+  '    static let json: [String: String] = [',
+];
+for (const lang of langs) {
+  const j = JSON.stringify(pick(lang, ['common', 'page']));
+  if (j.includes('"#')) fail(`page.* 문구에 "# 가 있으면 Swift 원시 문자열이 끊긴다 (${lang})`);
+  pageSwift.push(`        "${lang}": #"${j}"#,`);
+}
+pageSwift.push('    ]', '}', '');
+write('ios/LTBroadcast/PageText.swift', pageSwift.join('\n'));
 
 console.log(`i18n: ${langs.join(', ')} · 키 ${Object.keys(base).length}개${missing ? ` · 번역 빠짐 ${missing}` : ''}`);

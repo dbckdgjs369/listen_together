@@ -122,7 +122,7 @@ final class Discovery: ObservableObject {
                           let j = try? JSONSerialization.jsonObject(with: r.body) as? [String: Any],
                           j["app"] as? String == "ieum" else { return }
                     let room = FoundRoom(ip: ip, roomId: j["id"] as? String ?? ip,
-                                         name: (j["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "이름 없는 방",
+                                         name: (j["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? L.roomUnnamed,
                                          locked: j["locked"] as? Bool ?? true)
                     lock.lock(); found.append(room); lock.unlock()
                 }

@@ -24,6 +24,9 @@ xcrun devicectl device install app --device <UDID> \
   처리가 늦어 ReplayKit 이 버퍼를 버린다.
 - 청취 페이지(`LTBroadcast/Page.swift`)는 빌드 전에 `scripts/gen_page.sh` 가 안드로이드
   `CaptureService.PAGE` 에서 뜬다. 손으로 고치지 않는다.
+- 화면 문구는 저장소 루트 `i18n/` 이 원본이다. `npm run i18n` 이 `LTShared/L.swift`(문구 접근자),
+  `*.lproj/Localizable.strings`·`InfoPlist.strings`, `LTBroadcast/PageText.swift`(청취 페이지 문구)를 만든다.
+  코드에서는 `L.shareStart` 처럼 쓴다 — 키를 문자열로 치지 않는다.
 
 ## 구조
 

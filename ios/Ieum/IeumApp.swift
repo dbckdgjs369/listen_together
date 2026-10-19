@@ -23,13 +23,13 @@ struct IeumApp: App {
         if url.scheme == "https" {
             // 코드는 # 뒤에 있다. 틀린 코드면 그냥 앱만 열어 둔다.
             if let code = url.fragment?.removingPercentEncoding, let r = RoomCode.decode(code) {
-                player.join(host: r.ip, pw: r.pw, name: "방 \(code.uppercased())")
+                player.join(host: r.ip, pw: r.pw, name: L.roomFallback(code: code.uppercased()))
             }
         } else if let code = v("code"), let r = RoomCode.decode(code) {
-            player.join(host: r.ip, pw: r.pw, name: "방 \(code.uppercased())")
+            player.join(host: r.ip, pw: r.pw, name: L.roomFallback(code: code.uppercased()))
         } else if let host = v("host") {
             // 사파리 청취 페이지의 '이음 앱으로 듣기'가 방 이름까지 실어 보낸다.
-            player.join(host: host, pw: v("pw") ?? "", name: v("name") ?? "이음")
+            player.join(host: host, pw: v("pw") ?? "", name: v("name") ?? L.appName)
         }
     }
 }
@@ -63,15 +63,15 @@ struct ContentView: View {
             Theme.bg.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack {
-                    Text("이음").font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
+                    Text(L.appName).font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
                     Spacer()
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
 
                 Picker("", selection: $tab) {
-                    Text("듣기").tag(Tab.listen)
-                    Text("공유하기").tag(Tab.share)
+                    Text(L.tabListen).tag(Tab.listen)
+                    Text(L.tabShare).tag(Tab.share)
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 20)

@@ -52,19 +52,19 @@ struct ShareView: View {
 
     private var startCard: some View {
         Card {
-            Text("내 아이폰 소리 공유하기").font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.text)
-            TextField("방 이름 (예: 창헌의 방)", text: $roomName)
+            Text(L.shareTitle).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.text)
+            TextField(L.shareNamePlaceholder, text: $roomName)
                 .padding(12)
                 .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: 12))
             if player.state != .idle {
-                Text("지금 다른 방을 듣고 있어요. 공유를 시작하면 듣기는 멈춰요.")
+                Text(L.shareListeningWarn)
                     .font(.system(size: 12)).foregroundStyle(Theme.danger)
             }
             ZStack {
                 RoundedRectangle(cornerRadius: 14).fill(Theme.accent)
                 HStack(spacing: 8) {
                     Image(systemName: "dot.radiowaves.left.and.right")
-                    Text("공유 시작").font(.system(size: 16, weight: .semibold))
+                    Text(L.shareStart).font(.system(size: 16, weight: .semibold))
                 }
                 .foregroundStyle(.white)
                 .allowsHitTesting(false)
@@ -74,7 +74,7 @@ struct ShareView: View {
                     .simultaneousGesture(TapGesture().onEnded { if player.state != .idle { player.leave() } })
             }
             .frame(height: 52)
-            Text("누르면 나오는 창에서 '방송 시작'을 누르세요. 3초 뒤 시작돼요.")
+            Text(L.shareStartHint)
                 .font(.system(size: 12)).foregroundStyle(Theme.faint)
         }
     }
@@ -85,28 +85,28 @@ struct ShareView: View {
         return Card {
             HStack(spacing: 8) {
                 Circle().fill(Theme.live).frame(width: 8, height: 8)
-                Text("공유 중 · 듣는 사람 \(info.listeners)명")
+                Text(L.shareLive(n: info.listeners))
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.live)
             }
             Text(info.name).font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("방 코드").font(.system(size: 12)).foregroundStyle(Theme.dim)
+                Text(L.shareCodeLabel).font(.system(size: 12)).foregroundStyle(Theme.dim)
                 Text(code).font(.system(size: 40, weight: .heavy).monospaced()).foregroundStyle(Theme.text)
                     .textSelection(.enabled)
-                Text("비밀번호 \(info.pw)").font(.system(size: 15, weight: .semibold).monospaced())
+                Text(L.sharePw(pw: info.pw)).font(.system(size: 15, weight: .semibold).monospaced())
                     .foregroundStyle(Theme.dim)
             }
             .padding(.vertical, 4)
 
             HStack(spacing: 10) {
-                Button(copied ? "복사했어요" : "초대 링크 복사") {
+                Button(copied ? L.shareCopied : L.shareCopyLink) {
                     UIPasteboard.general.string = RoomCodeSite.link(code: code)
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
                 }
                 .buttonStyle(PrimaryButton())
-                Button("QR 보기") { showQR = true }
+                Button(L.shareShowQr) { showQR = true }
                     .buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
             }
             .sheet(isPresented: $showQR) { QRSheet(code: code, pw: info.pw) }
@@ -114,39 +114,39 @@ struct ShareView: View {
             Button {
                 locked = true
             } label: {
-                Label("화면 잠금", systemImage: "lock.fill")
+                Label(L.shareLock, systemImage: "lock.fill")
             }
             .buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
             // 방송은 확장만 끝낼 수 있다. 시스템 방송 버튼은 공유 중엔 눌러도 창이 안 떠서(실측),
             // 확장 서버에 /stop 을 보내 스스로 끝내게 한다.
-            Button("공유 중지") {
+            Button(L.shareStop) {
                 MiniHTTP.get(host: "127.0.0.1", path: "/stop", timeout: 1) { _ in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { poll() }
                 }
             }
             .buttonStyle(PrimaryButton(color: Theme.danger))
 
-            Text("친구는 이음 앱의 '방 코드'에 넣거나, 브라우저로 \(RoomCodeSite.url) 에서 코드를 넣으면 돼요.")
+            Text(L.shareFriendHint(site: RoomCodeSite.url))
                 .font(.system(size: 12)).foregroundStyle(Theme.dim)
             ForEach(info.addrs, id: \.self) { a in
                 Text(verbatim: "http://\(a):\(LTPort.stream)/?pw=\(info.pw)")
                     .font(.system(size: 11).monospaced()).foregroundStyle(Theme.faint)
                     .textSelection(.enabled)
             }
-            Text("아이폰 화면이 잠기면 공유가 꺼져요. 폰을 내려 둘 땐 '화면 잠금'을 눌러 주세요. 어둡게 꺼진 것처럼 보이지만 공유는 계속돼요.")
+            Text(L.shareLockHint)
                 .font(.system(size: 12)).foregroundStyle(Theme.faint)
         }
     }
 
     private var howCard: some View {
         Card {
-            Text("알아 두세요").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+            Text(L.shareTipsTitle).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
             VStack(alignment: .leading, spacing: 6) {
-                bullet("음악 앱을 먼저 재생해 두면 바로 들려요.")
-                bullet("화면이 잠기면 아이폰이 방송을 끊어요. 공유하는 동안은 측면 버튼 대신 이음의 '화면 잠금'을 쓰세요.")
-                bullet("화면은 보내지 않아요. 아이폰이 '화면 방송'을 통해서만 다른 앱 소리를 내주기 때문에 녹화 표시가 떠요.")
-                bullet("Apple Music 등 일부 앱은 저작권 보호로 소리가 안 잡힐 수 있어요.")
-                bullet("친구와 같은 Wi-Fi 이거나, 친구가 내 개인용 핫스팟에 연결해야 해요.")
+                bullet(L.shareTipPlayFirst)
+                bullet(L.shareTipLock)
+                bullet(L.shareTipNoScreen)
+                bullet(L.shareTipDrm)
+                bullet(L.shareTipWifi)
             }
         }
     }
@@ -184,8 +184,8 @@ struct QRSheet: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("QR 로 들어오기").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
-            Text("같은 Wi-Fi 에 있는 폰 카메라로 찍으면 바로 들어와요")
+            Text(L.qrTitle).font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
+            Text(L.qrLead)
                 .font(.system(size: 13)).foregroundStyle(Theme.dim).multilineTextAlignment(.center)
             if let img = Self.image(RoomCodeSite.link(code: code)) {
                 // 흰 바탕·여백이 있어야 카메라가 잘 읽는다. 어두운 테마 위에 그대로 두면 못 읽는 폰이 있다.
@@ -193,9 +193,9 @@ struct QRSheet: View {
                     .padding(14).background(.white, in: RoundedRectangle(cornerRadius: 16))
                     .frame(maxWidth: 280)
             }
-            Text("방 코드 \(code)  ·  비밀번호 \(pw)")
+            Text(L.qrFoot(code: code, pw: pw))
                 .font(.system(size: 14, weight: .semibold).monospaced()).foregroundStyle(Theme.dim)
-            Button("닫기") { dismiss() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
+            Button(L.close) { dismiss() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

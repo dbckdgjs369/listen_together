@@ -36,12 +36,12 @@ struct ShareLockView: View {
                 VStack(spacing: 6) {
                     HStack(spacing: 8) {
                         Circle().fill(Theme.live).frame(width: 8, height: 8)
-                        Text("공유 중").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.live)
+                        Text(L.lockSharing).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.live)
                     }
-                    Text("듣는 사람 \(listeners)명").font(.system(size: 13)).foregroundStyle(Theme.faint)
+                    Text(L.lockListeners(n: listeners)).font(.system(size: 13)).foregroundStyle(Theme.faint)
                 }
                 unlockButton
-                Text("길게 눌러 잠금 해제").font(.system(size: 12)).foregroundStyle(Theme.faint)
+                Text(L.lockHint).font(.system(size: 12)).foregroundStyle(Theme.faint)
             }
             // 같은 자리에 오래 켜 두면 화면에 자국이 남을 수 있어 조금씩 옮긴다.
             .offset(offset)

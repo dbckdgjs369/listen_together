@@ -148,9 +148,11 @@ final class StreamServer {
     private func handle(fd: Int32, peer: String) {
         guard let request = readRequest(fd) else { Darwin.close(fd); return }
         let path = requestPath(request)
+        // 청취자는 호스트와 다른 언어를 쓸 수 있다. 문구는 이 폰 설정이 아니라 요청을 따른다.
+        let (lang, t) = pageText(request)
 
         if ended {
-            reply(fd, "410 Gone", "text/plain; charset=utf-8", Data("호스트가 공유를 종료했어요.".utf8))
+            reply(fd, "410 Gone", "text/plain; charset=utf-8", Data((t["http_ended"] ?? "").utf8))
             return
         }
 
@@ -202,14 +204,13 @@ final class StreamServer {
 
         if path.hasPrefix("/check") {
             let deny = checkPw(peer, param(path, "pw") ?? "")
-            if deny != 0 { writeDenied(fd, deny) }
+            if deny != 0 { writeDenied(fd, deny, t) }
             else { reply(fd, "204 No Content", nil, nil) }
             return
         }
 
         if !path.hasPrefix("/stream") {
-            let html = Page.html.replacingOccurrences(of: "%ROOM%", with: escapeHTML(roomName.isEmpty ? "이음" : roomName))
-            reply(fd, "200 OK", "text/html; charset=utf-8", Data(html.utf8))
+            reply(fd, "200 OK", "text/html; charset=utf-8", Data(page(lang, t).utf8))
             return
         }
 
@@ -217,7 +218,7 @@ final class StreamServer {
         let deny = checkPw(peer, param(path, "pw") ?? "")
         if deny != 0 {
             os_log("입장 거부 %{public}@ → %d", log: log, type: .info, peer, deny)
-            writeDenied(fd, deny)
+            writeDenied(fd, deny, t)
             return
         }
 
@@ -313,13 +314,56 @@ final class StreamServer {
         return 401
     }
 
-    private func writeDenied(_ fd: Int32, _ code: Int) {
+    private func writeDenied(_ fd: Int32, _ code: Int, _ t: [String: String]) {
         if code == 401 {
-            reply(fd, "401 Unauthorized", "text/plain; charset=utf-8", Data("비밀번호가 맞지 않습니다.".utf8))
+            reply(fd, "401 Unauthorized", "text/plain; charset=utf-8", Data((t["http_wrong_pw"] ?? "").utf8))
         } else {
             reply(fd, "429 Too Many Requests", "text/plain; charset=utf-8",
-                  Data("시도가 너무 많습니다. 잠시 후 다시 해주세요.".utf8))
+                  Data((t["http_too_many"] ?? "").utf8))
         }
+    }
+
+    // ── 청취 페이지 문구 ── 안드로이드 CaptureService.page() 와 같은 규칙.
+
+    /// 언어별 문구(PageText.swift — i18n/ 에서 생성). 처음 한 번만 푼다.
+    private static let pageTexts: [String: [String: String]] = PageText.json.compactMapValues {
+        (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: String]
+    }
+
+    /// 요청의 Accept-Language 에서 우리가 가진 첫 언어. 없으면 영어.
+    /// 브라우저는 선호 순서대로 적어 보내므로 q 값은 보지 않는다.
+    private func pageText(_ req: String) -> (String, [String: String]) {
+        for line in req.components(separatedBy: "\r\n") {
+            guard let c = line.firstIndex(of: ":"),
+                  line[..<c].trimmingCharacters(in: .whitespaces).lowercased() == "accept-language" else { continue }
+            for part in line[line.index(after: c)...].split(separator: ",") {
+                let tag = part.split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces).lowercased() } ?? ""
+                let lang = String(tag.split(separator: "-").first ?? "")
+                if let t = Self.pageTexts[lang] { return (lang, t) }
+            }
+            break
+        }
+        return ("en", Self.pageTexts["en"] ?? [:])
+    }
+
+    private static let token = try! NSRegularExpression(pattern: #"\{\{(\w+)\}\}"#)
+
+    /// 본문 속 {{키}} 는 그 자리에 HTML 로, 스크립트가 쓰는 문구는 T 객체 하나로 통째로 넣는다.
+    private func page(_ lang: String, _ t: [String: String]) -> String {
+        let html = NSMutableString(string: Page.html)
+        // 뒤에서부터 바꿔야 앞쪽 위치가 안 밀린다.
+        for m in Self.token.matches(in: Page.html, range: NSRange(location: 0, length: html.length)).reversed() {
+            let key = html.substring(with: m.range(at: 1))
+            html.replaceCharacters(in: m.range, with: escapeHTML(t[key] ?? ""))
+        }
+        var withLang = t
+        withLang["lang"] = lang
+        // 기본 설정의 JSONSerialization 은 "/" 를 "\/" 로 적으므로 문구가 </script> 를 품어도 안 끊긴다.
+        let json = (try? JSONSerialization.data(withJSONObject: withLang)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        return (html as String)
+            .replacingOccurrences(of: "%LANG%", with: lang)
+            .replacingOccurrences(of: "%T%", with: json)
+            .replacingOccurrences(of: "%ROOM%", with: escapeHTML(roomName.isEmpty ? (t["app_name"] ?? "") : roomName))
     }
 
     // ── 유틸 ──────────────────────────────────────────────────

@@ -23,15 +23,15 @@ struct ListenView: View {
         }
         .onAppear { discovery.start() }
         .onDisappear { discovery.stop() }
-        .alert("비밀번호", isPresented: Binding(get: { askingPw != nil }, set: { if !$0 { askingPw = nil } })) {
-            TextField("4자리 숫자", text: $pwInput).keyboardType(.numberPad)
-            Button("취소", role: .cancel) { askingPw = nil }
-            Button("입장") {
+        .alert(L.listenPwTitle, isPresented: Binding(get: { askingPw != nil }, set: { if !$0 { askingPw = nil } })) {
+            TextField(L.listenPwPlaceholder, text: $pwInput).keyboardType(.numberPad)
+            Button(L.cancel, role: .cancel) { askingPw = nil }
+            Button(L.listenEnter) {
                 if let r = askingPw { player.join(host: r.ip, pw: pwInput, name: r.name) }
                 askingPw = nil
             }
         } message: {
-            Text("호스트 화면에 보이는 4자리 숫자를 넣어 주세요.")
+            Text(L.listenPwMessage)
         }
     }
 
@@ -44,7 +44,7 @@ struct ListenView: View {
                 Text(statusText).font(.system(size: 13, weight: .medium)).foregroundStyle(statusColor)
                 Spacer()
                 if player.state == .playing {
-                    Text("버퍼 \(player.bufferedMs)ms").font(.system(size: 11)).foregroundStyle(Theme.faint)
+                    Text(L.listenBuffer(ms: player.bufferedMs)).font(.system(size: 11)).foregroundStyle(Theme.faint)
                 }
             }
             Text(player.roomName.isEmpty ? player.host : player.roomName)
@@ -54,46 +54,46 @@ struct ListenView: View {
             switch player.state {
             case .wrongPassword, .tooMany:
                 HStack {
-                    TextField("비밀번호 4자리", text: $pwInput)
+                    TextField(L.listenPwField, text: $pwInput)
                         .keyboardType(.numberPad)
                         .padding(10)
                         .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: 10))
-                    Button("다시 입장") { player.retry(pw: pwInput) }
+                    Button(L.listenRejoin) { player.retry(pw: pwInput) }
                         .buttonStyle(PrimaryButton())
                         .frame(width: 120)
                 }
             case .ended:
                 // 끝난 방엔 다시 들어갈 수 없다. 호스트가 공유를 다시 켜면 코드·비밀번호가
                 // 새로 바뀌므로, 같은 방 카드에서 '다시 시도'를 주면 헛돌기만 한다.
-                Text("호스트가 공유를 다시 켜면 아래 목록에 새 방으로 떠요.")
+                Text(L.listenEndedHint)
                     .font(.system(size: 13)).foregroundStyle(Theme.dim)
-                Button("닫기") { player.leave() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
+                Button(L.close) { player.leave() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
             case .lost:
                 HStack(spacing: 10) {
-                    Button("다시 시도") { player.retry() }.buttonStyle(PrimaryButton())
-                    Button("닫기") { player.leave() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
+                    Button(L.listenTryAgain) { player.retry() }.buttonStyle(PrimaryButton())
+                    Button(L.close) { player.leave() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
                 }
             case .idle:
                 HStack(spacing: 10) {
-                    Button("다시 듣기") { player.retry() }.buttonStyle(PrimaryButton())
-                    Button("닫기") { player.leave() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
+                    Button(L.listenListenAgain) { player.retry() }.buttonStyle(PrimaryButton())
+                    Button(L.close) { player.leave() }.buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
                 }
             default:
-                Button("나가기") { player.leave() }.buttonStyle(PrimaryButton(color: Theme.danger))
+                Button(L.listenLeave) { player.leave() }.buttonStyle(PrimaryButton(color: Theme.danger))
             }
         }
     }
 
     private var statusText: String {
         switch player.state {
-        case .idle: return "멈춤"
-        case .connecting(let n): return n == 0 ? "연결 중…" : "재접속 중… (\(n)회)"
-        case .playing: return "듣는 중"
-        case .wrongPassword: return "비밀번호가 맞지 않아요"
-        case .tooMany: return "시도가 너무 많아요. 잠시 후 다시 해 주세요"
-        case .ended: return "호스트가 공유를 종료했어요"
-        case .offline: return "Wi-Fi 연결을 확인해 주세요"
-        case .lost: return "연결할 수 없어요 — 방이 끝났거나 다른 Wi-Fi 일 수 있어요"
+        case .idle: return L.listenStateIdle
+        case .connecting(let n): return n == 0 ? L.listenStateConnecting : L.listenStateReconnecting(n: n)
+        case .playing: return L.listenStatePlaying
+        case .wrongPassword: return L.listenStateWrongPw
+        case .tooMany: return L.listenStateTooMany
+        case .ended: return L.listenStateEnded
+        case .offline: return L.listenStateOffline
+        case .lost: return L.listenStateLost
         }
     }
 
@@ -110,7 +110,7 @@ struct ListenView: View {
     private var roomsCard: some View {
         Card {
             HStack {
-                Text("같은 Wi-Fi 의 방").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+                Text(L.listenRoomsTitle).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
                 Spacer()
                 if discovery.scanning { ProgressView().scaleEffect(0.7) }
                 Button { discovery.scan() } label: { Image(systemName: "arrow.clockwise") }
@@ -118,8 +118,8 @@ struct ListenView: View {
             }
             if discovery.rooms.isEmpty {
                 Text(discovery.myAddress == nil
-                     ? "Wi-Fi 에 연결되어 있지 않아요. 호스트와 같은 Wi-Fi 나 호스트의 핫스팟에 연결해 주세요."
-                     : "아직 찾은 방이 없어요. 호스트가 공유를 켰는지 확인해 주세요.\n카페 같은 공용 Wi-Fi 는 기기끼리 연결을 막기도 해요 — 그럴 땐 호스트의 '와이파이 없이 연결' 핫스팟을 쓰세요.")
+                     ? L.listenNoWifi
+                     : L.listenNoRooms)
                     .font(.system(size: 13)).foregroundStyle(Theme.dim)
             } else {
                 ForEach(discovery.rooms) { room in
@@ -143,7 +143,7 @@ struct ListenView: View {
                 }
             }
             if let me = discovery.myAddress {
-                Text("내 주소 \(me)").font(.system(size: 11)).foregroundStyle(Theme.faint)
+                Text(L.listenMyAddress(ip: me)).font(.system(size: 11)).foregroundStyle(Theme.faint)
             }
         }
     }
@@ -152,17 +152,17 @@ struct ListenView: View {
 
     private var codeCard: some View {
         Card {
-            Text("방 코드로 들어가기").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-            Text("호스트 화면에 보이는 6자리 코드예요. 목록에 방이 안 보일 때 쓰세요.")
+            Text(L.listenCodeTitle).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+            Text(L.listenCodeLead)
                 .font(.system(size: 13)).foregroundStyle(Theme.dim)
             HStack {
-                TextField("예: 3F7K2A", text: $code)
+                TextField(L.listenCodePlaceholder, text: $code)
                     .textInputAutocapitalization(.characters)
                     .autocorrectionDisabled()
                     .font(.system(size: 20, weight: .semibold).monospaced())
                     .padding(12)
                     .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: 12))
-                Button("입장") { joinByCode() }
+                Button(L.listenEnter) { joinByCode() }
                     .buttonStyle(PrimaryButton())
                     .frame(width: 90)
             }
@@ -174,12 +174,12 @@ struct ListenView: View {
 
     private func joinByCode() {
         guard let r = RoomCode.decode(code) else {
-            codeError = "코드를 읽을 수 없어요. 다시 확인해 주세요."
+            codeError = L.listenCodeError
             return
         }
         codeError = nil
         pwInput = r.pw
-        player.join(host: r.ip, pw: r.pw, name: "방 \(code.uppercased())")
+        player.join(host: r.ip, pw: r.pw, name: L.roomFallback(code: code.uppercased()))
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
