@@ -23,7 +23,7 @@ final class DriveTests: XCTestCase {
     private func startShare() {
         XCTAssertTrue(ieum.staticTexts["공유 시작"].waitForExistence(timeout: 5), "이미 공유 중이거나 화면이 다르다")
         ieum.staticTexts["공유 시작"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        tapSystemButton(["방송 시작", "Start Broadcast"])
+        tapSystemButton(["방송 시작", "공유 시작", "Start Broadcast"])
         // 시작한 뒤에도 시스템 창이 '방송 중단' 으로 바뀐 채 남는다. 창 바깥(위쪽)을 눌러 닫는다.
         sleep(4)
         ieum.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
@@ -106,6 +106,24 @@ final class DriveTests: XCTestCase {
         shot.name = "link"; shot.lifetime = .keepAlways
         add(shot)
         XCTAssertEqual(ieum.state, .runningForeground, "이음이 아니라 다른 앱(사파리)이 열림")
+    }
+
+    /// 볼륨 실험: 최대 15초 → 0 15초 → 한 칸 15초. 공유는 켜 둔 상태에서 돌리고, 맥이 /diag 로 소리 크기를 잰다.
+    /// 구간이 바뀔 때마다 시각을 출력한다(맥 기록과 맞춰 본다).
+    func testVolumeSweep() {
+        func press(_ b: XCUIDevice.Button, _ n: Int) { for _ in 0..<n { XCUIDevice.shared.press(b); usleep(150_000) } }
+        func stamp(_ s: String) { print("VOL \(s) @\(Int(Date().timeIntervalSince1970))"); mark("vol-" + s) }
+        press(.volumeUp, 18); stamp("max"); sleep(15)
+        press(.volumeDown, 18); stamp("zero"); sleep(15)
+        press(.volumeUp, 1); stamp("one"); sleep(15)
+        stamp("end")
+    }
+
+    /// 화면을 남기며 이름에 시각을 붙인다.
+    private func mark(_ name: String) {
+        let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        a.name = "\(name)@\(Int(Date().timeIntervalSince1970))"; a.lifetime = .keepAlways
+        add(a)
     }
 
     /// 사파리에 이미 떠 있는 페이지의 '재생' 버튼을 누른다(맥이 devicectl 로 띄워 둔다).

@@ -25,6 +25,7 @@ struct ShareView: View {
     @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var copied = false
     @State private var showQR = false
+    @State private var locked = false
 
     var body: some View {
         ScrollView {
@@ -39,8 +40,14 @@ struct ShareView: View {
         .onReceive(timer) { _ in poll() }
         // 화면이 잠기면 iOS 가 화면 방송을 끊는다 — 공유도 같이 꺼진다(실측). 이 화면을
         // 띄워 둔 동안이라도 자동 잠금을 막는다. 다른 앱으로 가면 iOS 가 다시 잠근다.
-        .onChange(of: info != nil) { live in UIApplication.shared.isIdleTimerDisabled = live }
+        .onChange(of: info != nil) { live in
+            UIApplication.shared.isIdleTimerDisabled = live
+            if !live { locked = false }
+        }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .fullScreenCover(isPresented: $locked) {
+            ShareLockView(listeners: info?.listeners ?? 0) { locked = false }
+        }
     }
 
     private var startCard: some View {
@@ -103,6 +110,13 @@ struct ShareView: View {
                     .buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
             }
             .sheet(isPresented: $showQR) { QRSheet(code: code, pw: info.pw) }
+            // 진짜 잠금은 방송을 끊으므로, 어둡게 덮는 이음 잠금을 쓴다(ShareLockView).
+            Button {
+                locked = true
+            } label: {
+                Label("화면 잠금", systemImage: "lock.fill")
+            }
+            .buttonStyle(PrimaryButton(color: Theme.surfaceAlt))
             // 방송은 확장만 끝낼 수 있다. 시스템 방송 버튼은 공유 중엔 눌러도 창이 안 떠서(실측),
             // 확장 서버에 /stop 을 보내 스스로 끝내게 한다.
             Button("공유 중지") {
@@ -119,7 +133,7 @@ struct ShareView: View {
                     .font(.system(size: 11).monospaced()).foregroundStyle(Theme.faint)
                     .textSelection(.enabled)
             }
-            Text("화면이 잠기면 공유가 꺼져요. 이 화면을 띄워 두면 잠기지 않아요.")
+            Text("아이폰 화면이 잠기면 공유가 꺼져요. 폰을 내려 둘 땐 '화면 잠금'을 눌러 주세요. 어둡게 꺼진 것처럼 보이지만 공유는 계속돼요.")
                 .font(.system(size: 12)).foregroundStyle(Theme.faint)
         }
     }
@@ -129,7 +143,7 @@ struct ShareView: View {
             Text("알아 두세요").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
             VStack(alignment: .leading, spacing: 6) {
                 bullet("음악 앱을 먼저 재생해 두면 바로 들려요.")
-                bullet("화면이 잠기면 아이폰이 방송을 끊어요. 공유하는 동안은 화면을 켜 두세요.")
+                bullet("화면이 잠기면 아이폰이 방송을 끊어요. 공유하는 동안은 측면 버튼 대신 이음의 '화면 잠금'을 쓰세요.")
                 bullet("화면은 보내지 않아요. 아이폰이 '화면 방송'을 통해서만 다른 앱 소리를 내주기 때문에 녹화 표시가 떠요.")
                 bullet("Apple Music 등 일부 앱은 저작권 보호로 소리가 안 잡힐 수 있어요.")
                 bullet("친구와 같은 Wi-Fi 이거나, 친구가 내 개인용 핫스팟에 연결해야 해요.")
