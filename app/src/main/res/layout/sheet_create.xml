@@ -11,8 +11,8 @@
 
     <View style="@style/Grab" />
 
-    <TextView style="@style/SheetTitle" android:text="방 만들기" />
-    <TextView style="@style/SheetLead" android:text="근처 사람에게 이 이름으로 보여요" />
+    <TextView style="@style/SheetTitle" android:text="@string/create_title" />
+    <TextView style="@style/SheetLead" android:text="@string/create_lead" />
 
     <EditText
         android:id="@+id/nameInput"
@@ -26,7 +26,7 @@
         android:id="@+id/btnStart"
         style="@style/Btn.Primary"
         android:layout_marginTop="20dp"
-        android:text="공유 시작" />
+        android:text="@string/create_start" />
 
     <!--
       다음 동의 창이 "화면 녹화" 라고 뜨는 걸 여기서 미리 풀어준다.

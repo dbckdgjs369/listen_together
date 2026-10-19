@@ -24,6 +24,6 @@
         style="@style/Btn.Ghost"
         android:layout_marginTop="8dp"
         android:background="@drawable/bg_row_flat"
-        android:text="취소"
+        android:text="@string/cancel"
         android:textColor="@color/text_dim" />
 </LinearLayout>

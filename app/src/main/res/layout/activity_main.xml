@@ -52,7 +52,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="이음"
+                            android:text="@string/app_name"
                             android:textColor="@color/text"
                             android:textSize="24sp"
                             android:textStyle="bold"
@@ -78,7 +78,7 @@
                         android:id="@+id/btnSettings"
                         style="@style/IconBtn"
                         android:layout_marginEnd="-10dp"
-                        android:contentDescription="설정"
+                        android:contentDescription="@string/settings"
                         android:src="@drawable/ic_gear" />
                 </LinearLayout>
 
@@ -158,7 +158,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="22dp"
-                            android:text="내 소리 공유하기"
+                            android:text="@string/home_share_title"
                             android:textColor="#FFFFFFFF"
                             android:textSize="21sp"
                             android:textStyle="bold"
@@ -169,7 +169,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="6dp"
                             android:lineSpacingExtra="3dp"
-                            android:text="이 폰에서 나는 소리를\n근처 사람들과 함께 들어요"
+                            android:text="@string/home_share_sub"
                             android:textColor="#C7FFFFFF"
                             android:textSize="14sp" />
                     </LinearLayout>
@@ -187,7 +187,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="근처의 방"
+                        android:text="@string/home_nearby"
                         android:textColor="@color/text_dim"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -228,7 +228,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="14dp"
-                        android:text="아직 근처에 방이 없어요"
+                        android:text="@string/home_empty_title"
                         android:textColor="@color/text"
                         android:textSize="15sp"
                         android:textStyle="bold" />
@@ -239,7 +239,7 @@
                         android:layout_marginTop="6dp"
                         android:gravity="center"
                         android:lineSpacingExtra="3dp"
-                        android:text="같은 Wi-Fi 에서 누군가 공유를 시작하면\n여기에 바로 떠요"
+                        android:text="@string/home_empty_sub"
                         android:textColor="@color/text_dim"
                         android:textSize="13sp" />
 
@@ -252,7 +252,7 @@
                         android:background="@drawable/bg_row_flat"
                         android:lineSpacingExtra="3dp"
                         android:padding="12dp"
-                        android:text="카페·호텔 같은 공용 Wi-Fi 는 기기끼리 연결을 막아서 방이 안 보일 수 있어요. 호스트에게 ‘와이파이 없이 연결’을 켜 달라고 하고, 그 핫스팟에 접속해 보세요."
+                        android:text="@string/home_empty_hint"
                         android:textColor="@color/text_dim"
                         android:textSize="12.5sp"
                         android:visibility="gone" />
@@ -278,7 +278,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="방이 안 보이나요? 방 코드로 들어가기"
+                        android:text="@string/home_by_code"
                         android:textColor="@color/text_dim"
                         android:textSize="14sp" />
 
@@ -319,7 +319,7 @@
                         style="@style/IconBtn"
                         android:layout_marginStart="-10dp"
                         android:layout_marginEnd="2dp"
-                        android:contentDescription="홈으로"
+                        android:contentDescription="@string/back_home"
                         android:src="@drawable/ic_back" />
 
                     <LinearLayout
@@ -359,7 +359,7 @@
                         android:id="@+id/btnSettingsHost"
                         style="@style/IconBtn"
                         android:layout_marginEnd="-10dp"
-                        android:contentDescription="설정"
+                        android:contentDescription="@string/settings"
                         android:src="@drawable/ic_gear" />
                 </LinearLayout>
 
@@ -378,7 +378,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="방 코드"
+                        android:text="@string/host_code_label"
                         android:textColor="@color/text_dim"
                         android:textSize="13sp" />
 
@@ -410,7 +410,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="비밀번호"
+                            android:text="@string/host_pw_label"
                             android:textColor="@color/text_dim"
                             android:textSize="13sp" />
 
@@ -451,7 +451,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="8dp"
-                                android:text="링크 보내기"
+                                android:text="@string/host_send_link"
                                 android:textColor="@color/text"
                                 android:textSize="15sp"
                                 android:textStyle="bold" />
@@ -477,7 +477,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="8dp"
-                                android:text="QR 보기"
+                                android:text="@string/host_show_qr"
                                 android:textColor="@color/text"
                                 android:textSize="15sp"
                                 android:textStyle="bold" />
@@ -518,7 +518,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="듣는 사람"
+                            android:text="@string/host_listeners"
                             android:textColor="@color/text"
                             android:textSize="15sp" />
 
@@ -550,7 +550,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="와이파이 없이 연결"
+                            android:text="@string/host_hotspot_row"
                             android:textColor="@color/text"
                             android:textSize="15sp" />
 
@@ -581,7 +581,7 @@
                 <Button
                     android:id="@+id/btnStop"
                     style="@style/Btn.Danger"
-                    android:text="공유 중지" />
+                    android:text="@string/host_stop" />
             </LinearLayout>
         </ScrollView>
 
@@ -605,7 +605,7 @@
                     android:id="@+id/btnListenBack"
                     style="@style/IconBtn"
                     android:layout_marginStart="-10dp"
-                    android:contentDescription="홈으로"
+                    android:contentDescription="@string/back_home"
                     android:src="@drawable/ic_back" />
 
                 <TextView
@@ -613,7 +613,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:gravity="center"
-                    android:text="같이 듣는 중"
+                    android:text="@string/listen_title"
                     android:textColor="@color/text_dim"
                     android:textSize="14sp" />
 
@@ -685,7 +685,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="지연"
+                            android:text="@string/listen_stat_latency"
                             android:textColor="@color/text_dim"
                             android:textSize="12sp" />
 
@@ -711,7 +711,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="수신"
+                            android:text="@string/listen_stat_signal"
                             android:textColor="@color/text_dim"
                             android:textSize="12sp" />
 
@@ -736,7 +736,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="음질"
+                            android:text="@string/listen_stat_quality"
                             android:textColor="@color/text_dim"
                             android:textSize="12sp" />
 
@@ -760,7 +760,7 @@
                     android:layout_marginTop="28dp"
                     android:paddingStart="24dp"
                     android:paddingEnd="24dp"
-                    android:text="비밀번호 다시 입력"
+                    android:text="@string/listen_retry_pw"
                     android:textSize="15sp"
                     android:visibility="gone" />
             </LinearLayout>
@@ -769,12 +769,12 @@
             <TextView
                 style="@style/Fine"
                 android:layout_marginBottom="14dp"
-                android:text="가운데를 누르면 소리를 꺼요 · 볼륨은 옆 버튼으로" />
+                android:text="@string/listen_hint" />
 
             <Button
                 android:id="@+id/btnLeave"
                 style="@style/Btn.Ghost"
-                android:text="그만 듣기" />
+                android:text="@string/listen_leave" />
         </LinearLayout>
 
         <!-- 잠깐 띄우는 알림. 토스트는 기기마다 모양이 달라 앱과 따로 논다 -->

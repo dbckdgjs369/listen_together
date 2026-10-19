@@ -40,5 +40,5 @@
         android:id="@+id/btnClose"
         style="@style/Btn.Ghost"
         android:layout_marginTop="20dp"
-        android:text="닫기" />
+        android:text="@string/close" />
 </LinearLayout>

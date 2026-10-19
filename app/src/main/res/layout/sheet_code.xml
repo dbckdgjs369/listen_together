@@ -11,8 +11,8 @@
 
     <View style="@style/Grab" />
 
-    <TextView style="@style/SheetTitle" android:text="방 코드로 들어가기" />
-    <TextView style="@style/SheetLead" android:text="호스트 화면 가운데 크게 보이는 코드예요.\n비밀번호가 들어 있어서 따로 칠 필요가 없어요." />
+    <TextView style="@style/SheetTitle" android:text="@string/code_title" />
+    <TextView style="@style/SheetLead" android:text="@string/code_lead" />
 
     <EditText
         android:id="@+id/codeInput"
@@ -34,7 +34,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
         android:gravity="center"
-        android:text="코드를 읽을 수 없어요 — 다시 확인해 주세요"
+        android:text="@string/code_error"
         android:textColor="@color/danger"
         android:textSize="13sp"
         android:visibility="gone" />
@@ -44,5 +44,5 @@
         style="@style/Btn.Primary"
         android:layout_marginTop="20dp"
         android:enabled="false"
-        android:text="들어가기" />
+        android:text="@string/code_go" />
 </LinearLayout>

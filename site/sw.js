@@ -5,8 +5,8 @@
  * 네트워크 우선이다 — 인터넷이 되면 항상 새 버전을 받고, 안 될 때만 캐시를 쓴다.
  * 캐시 우선으로 두면 roomcode.js 를 고쳐도 옛 규칙으로 계속 풀어서 엉뚱한 주소로 보낸다.
  */
-var CACHE = 'lt-site-v4';
-var FILES = ['./', './index.html', './roomcode.js?v=2', './manifest.webmanifest'];
+var CACHE = 'lt-site-v5';
+var FILES = ['./', './index.html', './i18n.js?v=1', './roomcode.js?v=2', './manifest.webmanifest'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }));

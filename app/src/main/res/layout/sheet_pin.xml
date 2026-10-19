@@ -12,7 +12,7 @@
     <View style="@style/Grab" />
 
     <TextView android:id="@+id/pinTitle" style="@style/SheetTitle" android:ellipsize="end" android:singleLine="true" />
-    <TextView android:id="@+id/pinLead" style="@style/SheetLead" android:text="호스트 화면에 보이는 비밀번호 4자리" />
+    <TextView android:id="@+id/pinLead" style="@style/SheetLead" android:text="@string/pin_lead" />
 
     <LinearLayout
         android:id="@+id/pinBoxes"

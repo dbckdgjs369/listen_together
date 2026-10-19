@@ -12,8 +12,8 @@
 
     <View style="@style/Grab" />
 
-    <TextView style="@style/SheetTitle" android:text="와이파이 없이 연결" />
-    <TextView style="@style/SheetLead" android:text="이 폰이 직접 와이파이를 만들어요. 친구는 카메라로 QR 을 찍어 붙으면 돼요." />
+    <TextView style="@style/SheetTitle" android:text="@string/hotspot_title" />
+    <TextView style="@style/SheetLead" android:text="@string/hotspot_lead" />
 
     <ImageView
         android:id="@+id/hsQr"

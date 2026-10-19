@@ -51,8 +51,12 @@ public class PlayerService extends Service {
      * 화면은 아무 말이 없었다. 사용자는 "나가기"를 눌러야 한다는 걸 알 길이 없었다.
      */
     public static volatile String currentHost;
-    /** 청취 상태 한 줄. 화면이 그대로 띄운다. */
-    public static volatile String stateText = "";
+    /**
+     * 청취 상태 한 줄의 문구 ID(R.string.player_*). 0 이면 아직 없음. 화면이 그대로 띄운다.
+     * 문장이 아니라 ID 를 두는 건, 화면이 "듣는 중인가" 를 문구 비교로 가렸기 때문이다 —
+     * 언어가 바뀌면 그 비교가 조용히 늘 거짓이 된다.
+     */
+    public static volatile int stateRes;
     /**
      * 호스트가 입장을 거절했는가(비밀번호 불일치·시도 초과).
      *
@@ -75,7 +79,7 @@ public class PlayerService extends Service {
      * 이게 없던 시절, 호스트가 공유를 끈 뒤에도 1초마다 재접속을 6분 넘게 했고
      * 홈에는 계속 "듣는 중" 이 떠 있었다. 닫힌 방을 영원히 기다렸다.
      */
-    public static volatile String endedReason;
+    public static volatile int endedRes;
     /**
      * 소리만 끈다. **연결은 그대로라** 다시 켜면 그 순간의 소리가 바로 나온다 —
      * 멈춘 자리부터 이어 듣는 일시정지가 아니다. 같이 듣는 물건이라 뒤처지면 안 된다.
@@ -137,7 +141,7 @@ public class PlayerService extends Service {
             pw = wantPw;
             denied = false;
             muted = false;
-            setState("연결 중…");
+            setState(R.string.player_connecting);
             startForegroundCompat(want);
             closeSock();     // 읽기를 끊어 루프가 새 주소로 다시 붙게 한다
             return START_NOT_STICKY;
@@ -146,12 +150,12 @@ public class PlayerService extends Service {
         host = want;
         pw = wantPw;
         denied = false;
-        endedReason = null;
+        endedRes = 0;
         muted = false;
         // setState 가 running 을 보고 무시하므로, 첫 상태를 쓰기 전에 세워야 한다.
         // 순서가 뒤집히면 "연결 중…" 이 통째로 삼켜져 화면이 빈 채로 시작한다.
         running = true;
-        setState("연결 중…");
+        setState(R.string.player_connecting);
         startForegroundCompat(want);
         acquireLocks();
         new Thread(new Runnable() {
@@ -187,16 +191,16 @@ public class PlayerService extends Service {
      * 그러면 여기서 currentHost 가 되살아나 — 나가기를 눌렀는데도 화면은 계속
      * "참여 중" 이라고 우겼다. 실제로 그랬다.
      */
-    private void setState(String s) {
+    private void setState(int res) {
         if (!running) return;
-        stateText = s;
+        stateRes = res;
         currentHost = host;
     }
 
     private void startForegroundCompat(String host) {
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(
-                CHANNEL_ID, "이음", NotificationManager.IMPORTANCE_LOW));
+                CHANNEL_ID, getString(R.string.app_name), NotificationManager.IMPORTANCE_LOW));
         Intent stop = new Intent(this, PlayerService.class).setAction(CaptureService.ACTION_STOP);
         android.app.PendingIntent pi = android.app.PendingIntent.getService(this, 1, stop,
                 android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
@@ -208,11 +212,11 @@ public class PlayerService extends Service {
                         | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
 
         Notification n = new Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("같이 듣는 중")
+                .setContentTitle(getString(R.string.listen_title))
                 .setContentText(host)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentIntent(openPi)
-                .addAction(new Notification.Action.Builder(null, "나가기", pi).build())
+                .addAction(new Notification.Action.Builder(null, getString(R.string.player_leave), pi).build())
                 .setOngoing(true)
                 .build();
         if (Build.VERSION.SDK_INT >= 34) {
@@ -282,9 +286,7 @@ public class PlayerService extends Service {
                     // 재시도해도 결과가 같다. 계속 붙으면 호스트의 실패 카운터만 올려서
                     // 스스로를 차단시킨다 — 여기서 멈추고 이유를 화면에 남긴다.
                     denied = true;
-                    setState(status == 401
-                            ? "비밀번호가 맞지 않습니다"
-                            : "시도가 너무 많습니다 — 잠시 후 다시");
+                    setState(status == 401 ? R.string.player_wrong_pw : R.string.player_too_many);
                     Log.w(TAG, "입장 거부: status=" + status);
                     closeSock();
                     running = false;
@@ -295,7 +297,7 @@ public class PlayerService extends Service {
                     // 답이라 Wi-Fi 흔들림과 헷갈릴 일이 없다 — 기다리지 않고 바로 끝낸다.
                     // 이걸 못 읽던 시절엔 본문을 WAV 헤더로 읽다 실패해 2분을 재시도했다.
                     Log.i(TAG, "player 포기: 호스트가 공유를 종료 (410)");
-                    endedReason = "호스트가 공유를 종료했어요";
+                    endedRes = R.string.player_host_ended;
                     closeSock();
                     running = false;
                     stopSelf();
@@ -330,7 +332,7 @@ public class PlayerService extends Service {
                 sampleRate = rate;
                 latencyMs = -1;
                 netPct = -1;
-                setState("듣는 중");
+                setState(R.string.player_listening);
                 failSince = 0;
                 everConnected = true;
 
@@ -405,7 +407,7 @@ public class PlayerService extends Service {
                 }
                 // 호스트가 연결을 닫았다(공유 끄기 등). 예외가 아니라서 그냥 두면
                 // 다음 실패가 날 때까지 화면이 "듣는 중" 으로 남는다.
-                setState("연결 끊김 — 다시 연결 중");
+                setState(R.string.player_disconnected);
             } catch (Exception e) {
                 Log.w(TAG, "player: " + e);
                 // ECONNREFUSED 는 "폰은 있는데 그 포트에서 아무도 안 받는다" — 공유를 끈 것이다.
@@ -417,8 +419,7 @@ public class PlayerService extends Service {
                 // 실패를 화면까지 올린다. 조용히 재시도만 하면 사용자 눈에는
                 // "듣는 중" 인데 소리만 안 나는 상태로 보인다. 그게 제일 나쁘다.
                 setState(e instanceof java.net.UnknownHostException
-                        ? "주소를 찾을 수 없음 — 재시도 중"
-                        : "연결 실패 — 재시도 중");
+                        ? R.string.player_host_not_found : R.string.player_failed);
             }
             closeSock();
             if (!running) break;
@@ -430,15 +431,15 @@ public class PlayerService extends Service {
                 refusedOnly = true;
             }
             if (notRefused) refusedOnly = false;
-            String end = null;
+            int end = 0;
             if (refusedOnly && now - failSince >= GIVE_UP_REFUSED_MS) {
-                end = everConnected ? "방이 종료됐어요" : "방에 연결할 수 없어요";
+                end = everConnected ? R.string.player_room_ended : R.string.player_cant_connect;
             } else if (now - failSince >= GIVE_UP_ANY_MS) {
-                end = "연결이 2분 넘게 끊겨서 듣기를 멈췄어요";
+                end = R.string.player_gave_up;
             }
-            if (end != null) {
-                Log.i(TAG, "player 포기: " + end);
-                endedReason = end;
+            if (end != 0) {
+                Log.i(TAG, "player 포기: " + getResources().getResourceEntryName(end));
+                endedRes = end;
                 running = false;
                 stopSelf();
                 break;
@@ -553,7 +554,7 @@ public class PlayerService extends Service {
     public void onDestroy() {
         running = false;
         currentHost = null;
-        stateText = "";
+        stateRes = 0;
         denied = false;
         muted = false;
         latencyMs = -1;

@@ -42,6 +42,23 @@ minSdk 29 (AudioPlaybackCapture 요구), targetSdk 36.
 | `PlayerService` | 참여자 네이티브 재생. 소켓을 직접 읽어 브라우저 `<audio>` 의 2~5초 버퍼를 피한다 |
 | `MainActivity` | 호스트/참여자 전환, 공유 대상 앱 선택, 핫스팟 QR |
 
+## 화면 문구 (다국어)
+
+문구의 원본은 `i18n/<언어>.json` 하나다. 고친 뒤 `npm run i18n` 을 돌리면 아래 파일이 다시 만들어진다.
+만든 파일은 같이 커밋한다 — 손으로 고치면 다음 생성 때 사라진다.
+
+| 키 앞머리 | 나가는 곳 |
+|---|---|
+| `common.*` | 전부 |
+| `android.*` | `app/src/main/res/values*/strings.xml` |
+| `page.*` | `app/src/main/assets/page/<언어>.json` — 호스트가 띄우는 청취 페이지. 요청의 `Accept-Language` 로 고른다 |
+| `site.*` | `site/i18n.js` — 방 코드 페이지. 브라우저 언어로 고른다 |
+
+- **기준은 영어(`en.json`)다.** 번역이 없는 언어·키는 영어로 나간다.
+- 빈칸은 `{이름}`. 안드로이드에서는 `en` 에 나온 순서대로 `getString(id, …)` 인자가 된다(생성된 `strings.xml` 주석 참고).
+- 언어 추가는 `i18n/ja.json` 같은 파일 하나면 된다. 안드로이드 13+ 설정의 앱별 언어 목록도 같이 생긴다.
+- 상태를 문구로 비교하지 않는다. 화면이 서비스 상태를 알아야 하면 문구 ID(`PlayerService.stateRes`)를 본다.
+
 ## 검증된 것
 
 - ✅ 유튜브뮤직 · 지니 캡처됨 (스포티파이는 앱이 자체 차단)

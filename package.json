@@ -11,6 +11,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc -b",
+    "i18n": "node scripts/gen-i18n.mjs",
     "dev:worker:a": "wrangler dev --env a",
     "dev:worker:b": "wrangler dev --env b",
     "dev:lan:a": "concurrently \"wrangler dev --env a --ip 0.0.0.0\" \"vite --host\"",

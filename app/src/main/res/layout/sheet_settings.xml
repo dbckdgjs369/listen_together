@@ -11,7 +11,7 @@
 
     <View style="@style/Grab" />
 
-    <TextView style="@style/SheetTitle" android:paddingStart="8dp" android:text="설정" />
+    <TextView style="@style/SheetTitle" android:paddingStart="8dp" android:text="@string/settings" />
 
     <LinearLayout
         android:id="@+id/rowBattery"
@@ -36,7 +36,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="배터리 최적화 제외"
+                android:text="@string/settings_sheet_battery"
                 android:textColor="@color/text"
                 android:textSize="15sp" />
 
@@ -74,7 +74,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="14dp"
             android:layout_weight="1"
-            android:text="주소로 직접 들어가기"
+            android:text="@string/direct_title"
             android:textColor="@color/text"
             android:textSize="15sp" />
 
@@ -108,7 +108,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="연결 정보"
+                android:text="@string/settings_sheet_net_info"
                 android:textColor="@color/text"
                 android:textSize="15sp" />
 

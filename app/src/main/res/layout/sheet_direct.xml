@@ -11,8 +11,8 @@
 
     <View style="@style/Grab" />
 
-    <TextView style="@style/SheetTitle" android:text="주소로 직접 들어가기" />
-    <TextView style="@style/SheetLead" android:text="자동 발견이 막힌 와이파이에서 써요. 호스트의 설정 › 연결 정보에 주소가 있어요." />
+    <TextView style="@style/SheetTitle" android:text="@string/direct_title" />
+    <TextView style="@style/SheetLead" android:text="@string/direct_lead" />
 
     <EditText
         android:id="@+id/ipInput"
@@ -27,7 +27,7 @@
         android:id="@+id/pwInput"
         style="@style/Input"
         android:layout_marginTop="8dp"
-        android:hint="비밀번호 4자리"
+        android:hint="@string/pw_hint"
         android:imeOptions="actionGo"
         android:inputType="number"
         android:maxLength="4" />
@@ -36,5 +36,5 @@
         android:id="@+id/btnGo"
         style="@style/Btn.Primary"
         android:layout_marginTop="20dp"
-        android:text="듣기" />
+        android:text="@string/direct_go" />
 </LinearLayout>

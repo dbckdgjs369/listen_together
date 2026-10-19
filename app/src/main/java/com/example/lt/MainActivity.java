@@ -251,9 +251,8 @@ public class MainActivity extends Activity {
         btnShowQr.setOnClickListener(v -> openInviteQr());
         findViewById(R.id.rowHotspot).setOnClickListener(v -> openHotspotSheet());
         findViewById(R.id.btnStop).setOnClickListener(v -> confirm(
-                "공유를 멈출까요?",
-                "듣고 있는 사람들의 소리가 끊겨요. 다시 공유하면 방 코드와 비밀번호가 새로 바뀌어요.",
-                "공유 중지", true, this::stopSharing));
+                R.string.host_stop_title, R.string.host_stop_body,
+                R.string.host_stop, true, this::stopSharing));
 
         // 듣는 중
         findViewById(R.id.btnListenBack).setOnClickListener(v -> goHome());
@@ -292,7 +291,8 @@ public class MainActivity extends Activity {
         String raw = u == null ? null : u.getFragment();
         String[] ipPw = raw == null ? null : RoomCode.decode(raw);
         if (ipPw == null) return;
-        join(ipPw[0], ipPw[1], nameForIp(ipPw[0], "방 " + raw.trim().toUpperCase(Locale.ROOT)));
+        join(ipPw[0], ipPw[1], nameForIp(ipPw[0],
+                getString(R.string.room_fallback, raw.trim().toUpperCase(Locale.ROOT))));
     }
 
     @Override protected void onResume() {
@@ -327,7 +327,7 @@ public class MainActivity extends Activity {
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
             if (pruneRooms()) refreshHosts();
-            if (hotspotClosedNote) { hotspotClosedNote = false; notice("공유를 끄면서 핫스팟도 껐어요"); }
+            if (hotspotClosedNote) { hotspotClosedNote = false; notice(R.string.host_hotspot_closed); }
             long now = SystemClock.elapsedRealtime();
             if (!rooms.isEmpty()) emptySince = now;
             int hint = rooms.isEmpty() && now - emptySince > EMPTY_HINT_MS ? View.VISIBLE : View.GONE;
@@ -343,9 +343,9 @@ public class MainActivity extends Activity {
     private void sync() {
         String host = PlayerService.currentHost;
         // 호스트가 공유를 끄는 등으로 서비스가 스스로 멈췄으면 이유를 한 번 알린다.
-        String ended = PlayerService.endedReason;
-        if (ended != null && host == null) {
-            PlayerService.endedReason = null;
+        int ended = PlayerService.endedRes;
+        if (ended != 0 && host == null) {
+            PlayerService.endedRes = 0;
             joinedName = null;
             notice(ended);
         }
@@ -419,11 +419,12 @@ public class MainActivity extends Activity {
         miniPlayer.setVisibility(host != null || sharing ? View.VISIBLE : View.GONE);
         if (sharing) {
             String code = currentCode();
-            setIf(miniText, code != null ? "공유 중 · 방 코드 " + code : "공유 중");
+            setIf(miniText, code != null ? getString(R.string.mini_sharing_code, code)
+                    : getString(R.string.mini_sharing));
         } else if (host != null) {
-            setIf(miniText, (joinedName != null ? joinedName : host)
-                    + (!listenLive() ? " · 다시 연결 중"
-                            : PlayerService.muted ? " · 소리 꺼짐" : " 듣는 중"));
+            setIf(miniText, getString(!listenLive() ? R.string.mini_reconnecting
+                            : PlayerService.muted ? R.string.mini_muted : R.string.mini_listening,
+                    joinedName != null ? joinedName : host));
         }
         miniDot.setBackgroundTintList(ColorStateList.valueOf(
                 color(sharing || listenLive() ? R.color.live : R.color.text_faint)));
@@ -453,7 +454,7 @@ public class MainActivity extends Activity {
         g.setCornerRadius(dp(14));
         av.setBackground(g);
         av.setTextColor(pal[1]);
-        String name = r.name.isEmpty() ? "이름 없는 방" : r.name;
+        String name = r.name.isEmpty() ? getString(R.string.room_unnamed) : r.name;
         av.setText(name.substring(0, name.offsetByCodePoints(0, 1)));
 
         ((TextView) row.findViewById(R.id.name)).setText(name);
@@ -463,8 +464,8 @@ public class MainActivity extends Activity {
         boolean current = r.ips.containsKey(PlayerService.currentHost);
         boolean live = current && listenLive();
         TextView sub = row.findViewById(R.id.sub);
-        sub.setText(live ? "듣는 중" : current ? "다시 연결 중"
-                : r.locked ? "비밀번호 필요" : "바로 들을 수 있어요");
+        sub.setText(live ? R.string.room_listening : current ? R.string.room_reconnecting
+                : r.locked ? R.string.room_locked : R.string.room_open);
         sub.setTextColor(color(live ? R.color.live : R.color.text_dim));
 
         row.setOnClickListener(v -> tapRoom(r));
@@ -512,22 +513,24 @@ public class MainActivity extends Activity {
     }
 
     private void renderHost() {
-        setIf(livePill, "공유 중 · " + CaptureService.roomName);
+        setIf(livePill, getString(R.string.host_live_pill, CaptureService.roomName));
 
         String code = currentCode();
         if (code == null) {
             codeText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
-            setIf(codeText, "Wi-Fi 연결 필요");
-            setIf(hostHint, "지금은 아무도 들어올 수 없어요. Wi-Fi 에 연결하거나 아래 "
-                    + "‘와이파이 없이 연결’로 핫스팟을 켜 주세요.");
+            setIf(codeText, getString(R.string.host_need_wifi));
+            setIf(hostHint, getString(R.string.host_hint_no_wifi));
         } else {
             codeText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 46);
             setIf(codeText, code);
-            SpannableStringBuilder sb = new SpannableStringBuilder("맥·PC는 ");
-            int at = sb.length();
-            sb.append(siteShort());
-            sb.setSpan(new ForegroundColorSpan(color(R.color.text)), at, sb.length(), 0);
-            sb.append(" 에서 코드를 입력하세요. 폰은 앱이나 QR 로 바로 들어와요.");
+            // 주소만 밝게 칠한다. 언어마다 문장 속 위치가 달라서 끼운 뒤에 찾는다.
+            String site = siteShort();
+            SpannableStringBuilder sb = new SpannableStringBuilder(
+                    getString(R.string.host_hint_code, site));
+            int at = sb.toString().indexOf(site);
+            if (at >= 0) {
+                sb.setSpan(new ForegroundColorSpan(color(R.color.text)), at, at + site.length(), 0);
+            }
             setIf(hostHint, sb);
         }
         btnSendLink.setEnabled(code != null);
@@ -540,9 +543,11 @@ public class MainActivity extends Activity {
         setIf(pwText, pw);
 
         int n = CaptureService.listeners;
-        setIf(listenerCount, n > 0 ? n + "명" : "아직 없어요");
+        setIf(listenerCount, n > 0 ? getResources().getQuantityString(R.plurals.host_listener_count, n, n)
+                : getString(R.string.host_no_listeners));
         listenerCount.setTextColor(color(n > 0 ? R.color.live : R.color.text_dim));
-        setIf(hotspotState, reservation != null || hotspotUp() ? "켜짐" : "핫스팟");
+        setIf(hotspotState, getString(reservation != null || hotspotUp()
+                ? R.string.host_hotspot_on : R.string.host_hotspot_off));
     }
 
     /** `https://` 와 끝의 `/` 를 뗀 주소. 화면에서 읽을 때는 그쪽이 짧고 덜 무섭다. */
@@ -555,9 +560,9 @@ public class MainActivity extends Activity {
         String code = currentCode();
         if (code == null) return;
         ClipboardManager cm = getSystemService(ClipboardManager.class);
-        cm.setPrimaryClip(ClipData.newPlainText("방 코드", code));
+        cm.setPrimaryClip(ClipData.newPlainText(getString(R.string.host_code_label), code));
         // 13+ 는 시스템이 복사됐다고 직접 띄운다. 겹쳐 띄우면 같은 말을 두 번 한다.
-        if (Build.VERSION.SDK_INT < 33) notice("방 코드를 복사했어요");
+        if (Build.VERSION.SDK_INT < 33) notice(R.string.host_code_copied);
     }
 
     /**
@@ -567,14 +572,12 @@ public class MainActivity extends Activity {
     private void sendLink() {
         String code = currentCode();
         if (code == null) return;
-        String text = CaptureService.roomName + " 에서 같이 들어요 🎧\n"
-                + RoomCode.SITE + "#" + code + "\n\n"
-                + "방 코드 " + code + " · 비밀번호 " + CaptureService.roomPw + "\n"
-                + "같은 Wi-Fi 에 있어야 들려요.";
+        String text = getString(R.string.host_invite, CaptureService.roomName,
+                RoomCode.SITE + "#" + code, code, CaptureService.roomPw);
         Intent send = new Intent(Intent.ACTION_SEND)
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, text);
-        startActivity(Intent.createChooser(send, "링크 보내기"));
+        startActivity(Intent.createChooser(send, getString(R.string.host_send_link)));
     }
 
     /** 친구 폰 카메라로 찍게 하는 초대 QR. 내용은 링크 보내기와 같은 `#코드` 링크다. */
@@ -582,21 +585,21 @@ public class MainActivity extends Activity {
         String code = currentCode();
         if (code == null) return;
         Dialog d = sheet(R.layout.sheet_qr);
-        ((TextView) d.findViewById(R.id.qrTitle)).setText("QR 로 들어오기");
-        ((TextView) d.findViewById(R.id.qrLead)).setText("같은 Wi-Fi 에 있는 폰 카메라로 찍으면 바로 들어와요");
+        ((TextView) d.findViewById(R.id.qrTitle)).setText(R.string.qr_title);
+        ((TextView) d.findViewById(R.id.qrLead)).setText(R.string.qr_lead);
         ((ImageView) d.findViewById(R.id.qrImage)).setImageBitmap(qrBitmap(RoomCode.SITE + "#" + code));
         ((TextView) d.findViewById(R.id.qrFoot)).setText(
-                "방 코드 " + code + "  ·  비밀번호 " + CaptureService.roomPw);
+                getString(R.string.qr_foot, code, CaptureService.roomPw));
         d.findViewById(R.id.btnClose).setOnClickListener(v -> d.dismiss());
         d.show();
     }
 
     // ── 듣는 중 ─────────────────────────────────────
 
-    /** 지금 호스트에 붙어 소리를 받고 있는가. 서비스 문구 중 이 상태는 "듣는 중" 하나뿐이다. */
+    /** 지금 호스트에 붙어 소리를 받고 있는가. 서비스 상태 중 이 상태는 player_listening 하나뿐이다. */
     private static boolean listenLive() {
         return PlayerService.currentHost != null && !PlayerService.denied
-                && "듣는 중".equals(PlayerService.stateText);
+                && PlayerService.stateRes == R.string.player_listening;
     }
 
     private void renderListen() {
@@ -604,7 +607,7 @@ public class MainActivity extends Activity {
         if (host == null) return;
         setIf(listenName, joinedName != null ? joinedName : host);
 
-        String st = PlayerService.stateText;
+        int st = PlayerService.stateRes;
         boolean denied = PlayerService.denied;
         // 서비스가 쓰는 문구 중 "붙어서 소리를 받는 중" 은 이것 하나다. 나머지는 전부 실패나 대기.
         boolean playing = listenLive();
@@ -613,13 +616,14 @@ public class MainActivity extends Activity {
         boolean muted = playing && PlayerService.muted;
         if (muted) c = color(R.color.text_dim);
 
-        setIf(listenState, denied ? st : muted ? "소리 꺼짐 — 가운데를 누르면 다시 들려요"
-                : playing ? "연결됨" : st.isEmpty() ? "연결 중…" : st);
+        int line = denied ? st : muted ? R.string.listen_muted
+                : playing ? R.string.listen_connected : st;
+        setIf(listenState, getString(line != 0 ? line : R.string.player_connecting));
         listenState.setTextColor(c);
         listenDot.setBackgroundTintList(ColorStateList.valueOf(c));
         pulse.setActive(playing);
         pulse.setMuted(muted);
-        pulse.setContentDescription(muted ? "소리 켜기" : "소리 끄기");
+        pulse.setContentDescription(getString(muted ? R.string.listen_unmute : R.string.listen_mute));
 
         // 거절은 '재시도 중인 실패'와 다르다. 그대로 두면 끝나지 않는 대기로 보이니
         // 할 수 있는 일(비밀번호 다시 입력)을 바로 내민다.
@@ -628,10 +632,12 @@ public class MainActivity extends Activity {
         if (!playing) return;
 
         int lat = PlayerService.latencyMs;
-        setIf(statLatency, lat >= 0 ? String.format(Locale.ROOT, "%.2f초", lat / 1000f) : "—");
+        setIf(statLatency, lat >= 0 ? getString(R.string.listen_seconds,
+                String.format(Locale.ROOT, "%.2f", lat / 1000f)) : "—");
         int net = PlayerService.netPct;
         // 실시간 대비 받은 양. 1초 단위라 출렁이므로 셋으로만 뭉뚱그린다.
-        setIf(statSignal, net < 0 ? "—" : net >= 90 ? "좋음" : net >= 70 ? "보통" : "불안정");
+        setIf(statSignal, net < 0 ? "—" : getString(net >= 90 ? R.string.listen_signal_good
+                : net >= 70 ? R.string.listen_signal_fair : R.string.listen_signal_poor));
         statSignal.setTextColor(color(net >= 0 && net < 70 ? R.color.danger : R.color.text));
         int rate = PlayerService.sampleRate;
         setIf(statQuality, rate <= 0 ? "—" : rate % 1000 == 0 ? rate / 1000 + "kHz"
@@ -716,7 +722,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void confirm(String title, String body, String ok, boolean danger, final Runnable then) {
+    private void confirm(int title, int body, int ok, boolean danger, final Runnable then) {
         final Dialog d = sheet(R.layout.sheet_confirm);
         ((TextView) d.findViewById(R.id.cTitle)).setText(title);
         ((TextView) d.findViewById(R.id.cBody)).setText(body);
@@ -741,9 +747,8 @@ public class MainActivity extends Activity {
         in.setText(saved);
         in.setSelection(saved.length());
         // 동의 창 버튼 이름이 버전마다 다르다. 13 까지는 '지금 시작', 14 부터는 '화면 공유'.
-        ((TextView) d.findViewById(R.id.consentText)).setText(
-                "다음 화면에서 ‘" + (Build.VERSION.SDK_INT >= 34 ? "화면 공유’를" : "지금 시작’을")
-                + " 누르면 시작돼요.\n음악·영상 소리만 보내고, 화면·알림음·통화는 보내지 않아요.");
+        ((TextView) d.findViewById(R.id.consentText)).setText(Build.VERSION.SDK_INT >= 34
+                ? R.string.create_consent_new : R.string.create_consent_old);
         final Button start = d.findViewById(R.id.btnStart);
         start.setOnClickListener(v -> {
             // 다음에도 같은 이름을 쓰게 저장한다. 매번 다시 적게 하면 결국 아무도 안 적는다.
@@ -768,9 +773,10 @@ public class MainActivity extends Activity {
     private void openPin(final String title, final String ip) {
         final Dialog d = sheet(R.layout.sheet_pin);
         ((TextView) d.findViewById(R.id.pinTitle)).setText(title);
-        if (PlayerService.denied && ip.equals(PlayerService.currentHost)) {
+        if (PlayerService.denied && PlayerService.stateRes != 0
+                && ip.equals(PlayerService.currentHost)) {
             TextView lead = d.findViewById(R.id.pinLead);
-            lead.setText(PlayerService.stateText + " — 다시 입력해 주세요");
+            lead.setText(getString(R.string.pin_retry, getString(PlayerService.stateRes)));
             lead.setTextColor(color(R.color.danger));
         }
 
@@ -811,7 +817,7 @@ public class MainActivity extends Activity {
                     iv.setImageResource(R.drawable.ic_backspace);
                     iv.setImageTintList(ColorStateList.valueOf(color(R.color.text_dim)));
                     iv.setScaleType(ImageView.ScaleType.CENTER);
-                    iv.setContentDescription("지우기");
+                    iv.setContentDescription(getString(R.string.pin_delete));
                     key = iv;
                 } else {
                     TextView t = new TextView(this);
@@ -873,7 +879,8 @@ public class MainActivity extends Activity {
                 return;
             }
             d.dismiss();
-            join(ipPw[0], ipPw[1], nameForIp(ipPw[0], "방 " + raw.trim().toUpperCase(Locale.ROOT)));
+            join(ipPw[0], ipPw[1], nameForIp(ipPw[0],
+                    getString(R.string.room_fallback, raw.trim().toUpperCase(Locale.ROOT))));
         });
         in.setOnEditorActionListener((tv, id, ev) -> {
             if (go.isEnabled()) go.performClick();
@@ -918,8 +925,7 @@ public class MainActivity extends Activity {
         PowerManager pm = getSystemService(PowerManager.class);
         boolean exempt = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
         ((TextView) d.findViewById(R.id.batterySub)).setText(exempt
-                ? "제외됨 — 오래 켜 둬도 끊기지 않아요"
-                : "오래 공유하면 폰이 앱을 멈출 수 있어요");
+                ? R.string.settings_sheet_battery_exempt : R.string.settings_sheet_battery_warn);
         d.findViewById(R.id.batteryChev).setVisibility(exempt ? View.GONE : View.VISIBLE);
         View rowBatt = d.findViewById(R.id.rowBattery);
         rowBatt.setClickable(!exempt);
@@ -939,14 +945,14 @@ public class MainActivity extends Activity {
             }
         }
         ((TextView) d.findViewById(R.id.netInfo)).setText(
-                ips.isEmpty() ? "Wi-Fi 에 연결되어 있지 않아요" : sb.toString());
+                ips.isEmpty() ? getString(R.string.settings_sheet_no_wifi) : sb.toString());
 
         String ver = "";
         try {
             ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
         } catch (Exception ignored) {
         }
-        ((TextView) d.findViewById(R.id.version)).setText("이음 " + ver);
+        ((TextView) d.findViewById(R.id.version)).setText(getString(R.string.app_name) + " " + ver);
         d.show();
     }
 
@@ -970,6 +976,10 @@ public class MainActivity extends Activity {
      * 기종 문제로 오진하게 된다 — 실제로 그럴 뻔했다. 실패는 반드시 말로 남긴다.
      * 핫스팟 시트가 떠 있으면 시트 안에도 쓴다. 시트의 dim 아래 알림은 안 보인다.
      */
+    private void notice(int msg) {
+        notice(getString(msg));
+    }
+
     private void notice(String msg) {
         snack.setText(msg);
         ui.removeCallbacks(hideSnack);
@@ -1024,10 +1034,10 @@ public class MainActivity extends Activity {
         for (int r : grantResults) {
             if (r != PackageManager.PERMISSION_GRANTED) {
                 notice(requestCode == REQ_PERMS
-                        ? "권한이 없으면 소리를 공유할 수 없어요"
+                        ? R.string.share_no_permission
                         : Build.VERSION.SDK_INT >= 33
-                                ? "근처 기기 권한이 없으면 핫스팟을 켤 수 없어요"
-                                : "이 안드로이드 버전은 위치 권한이 있어야 핫스팟을 켤 수 있어요");
+                                ? R.string.hotspot_need_nearby
+                                : R.string.hotspot_need_location);
                 return;
             }
         }
@@ -1040,7 +1050,7 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQ_PROJECTION) return;
         if (resultCode != RESULT_OK || data == null) {
-            notice("공유를 취소했어요");
+            notice(R.string.share_cancelled);
             return;
         }
         String name = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ROOM_NAME, "");
@@ -1052,7 +1062,7 @@ public class MainActivity extends Activity {
             stopService(new Intent(this, PlayerService.class));
             PlayerService.currentHost = null;
             joinedName = null;
-            notice("듣기를 멈추고 공유를 시작했어요");
+            notice(R.string.share_switched);
         }
 
         Intent svc = new Intent(this, CaptureService.class);
@@ -1070,7 +1080,7 @@ public class MainActivity extends Activity {
     private void askIgnoreBatteryOptimization() {
         PowerManager pm = getSystemService(PowerManager.class);
         if (pm.isIgnoringBatteryOptimizations(getPackageName())) {
-            notice("이미 배터리 최적화에서 제외되어 있어요");
+            notice(R.string.settings_sheet_battery_already);
             return;
         }
         try {
@@ -1144,19 +1154,19 @@ public class MainActivity extends Activity {
             hsQr.setImageBitmap(qrBitmap(
                     "WIFI:T:WPA;S:" + qrEscape(qrSsid) + ";P:" + qrEscape(qrPw) + ";;"));
             hsQr.setVisibility(View.VISIBLE);
-            setIf(hsInfo, "안 되면 직접 입력\n" + qrSsid + "  /  " + qrPw);
+            setIf(hsInfo, getString(R.string.hotspot_manual, qrSsid, qrPw));
             hsInfo.setVisibility(View.VISIBLE);
         } else {
             hsQr.setVisibility(View.GONE);
             if (on) {
                 // 설정에서 켠 핫스팟은 SSID/비번을 읽는 공개 API 가 없어 QR 만 못 그린다.
-                setIf(hsInfo, "핫스팟이 켜져 있어요. 비밀번호는 설정 › 핫스팟에서 확인하세요.");
+                setIf(hsInfo, getString(R.string.hotspot_on_info));
                 hsInfo.setVisibility(View.VISIBLE);
             } else {
                 hsInfo.setVisibility(View.GONE);
             }
         }
-        String label = on ? "핫스팟 끄기" : "핫스팟 켜기";
+        String label = getString(on ? R.string.hotspot_turn_off : R.string.hotspot_turn_on);
         if (!label.contentEquals(hsToggle.getText())) {
             // 배경을 매번 갈면 누르는 도중의 물결(ripple)이 끊긴다. 상태가 바뀔 때만.
             hsToggle.setText(label);
@@ -1169,13 +1179,13 @@ public class MainActivity extends Activity {
             reservation.close();
             reservation = null;
             qrSsid = qrPw = null;
-            notice("핫스팟을 껐어요");
+            notice(R.string.hotspot_turned_off);
             renderHotspotSheet();
             return;
         }
         // 설정에서 켠 핫스팟은 우리가 못 끈다. 끌 게 없는데 아무 말도 없으면
         // 눌렀는데 안 꺼진 것처럼 보인다 — 그것도 침묵으로 속이는 것이다.
-        notice("설정에서 켠 핫스팟은 앱이 끄지 못해요");
+        notice(R.string.hotspot_cant_turn_off);
     }
 
     /** 핫스팟 이름·비밀번호가 바뀌면 부른다. ssid 가 null 이면 QR 을 내린다. */
@@ -1262,9 +1272,9 @@ public class MainActivity extends Activity {
             String[] cfg = readApConfig(reservation);
             if (cfg != null) {
                 showQr(cfg[0], cfg[1]);
-                notice("핫스팟은 이미 켜져 있어요");
+                notice(R.string.hotspot_already_on);
             } else {
-                notice("핫스팟은 켜져 있지만 비밀번호를 읽을 수 없어요 — 설정에서 확인하세요");
+                notice(R.string.hotspot_on_no_pw);
             }
             return;
         }
@@ -1289,11 +1299,11 @@ public class MainActivity extends Activity {
         // 실패를 못 알리느니 아예 시작을 안 하고 이유를 말하는 편이 낫다.
         if (Settings.Global.getInt(getContentResolver(),
                 Settings.Global.AIRPLANE_MODE_ON, 0) != 0) {
-            notice("비행기모드에서는 핫스팟을 켤 수 없어요");
+            notice(R.string.hotspot_airplane);
             return;
         }
         if (wm == null) {
-            notice("이 기기에서 Wi-Fi 를 쓸 수 없어요");
+            notice(R.string.hotspot_no_wifi);
             return;
         }
         // **Wi-Fi 가 켜져 있는지는 보지 않는다.** 한때 여기서 막았는데 틀렸다 —
@@ -1305,18 +1315,18 @@ public class MainActivity extends Activity {
         // 그 주소로 나와 있으며, 앱은 그걸로 잘 돈다. "실패" 라고 하면 멀쩡한 상황을
         // 고장난 것처럼 보이게 만든다.
         if (hotspotUp()) {
-            notice("핫스팟이 이미 켜져 있어요 — 친구는 설정에 뜬 비밀번호로 붙으면 돼요");
+            notice(R.string.hotspot_system_on);
             return;
         }
 
-        notice("핫스팟을 켜는 중…");
+        notice(R.string.hotspot_starting);
         // 콜백이 안 오는 길이 또 있을 수 있다. 비행기모드는 위에서 걸렀지만
         // 그게 유일한 경우라는 보장이 없으니, 잠잠하면 잠잠하다고 말하게 한다.
         // 말없이 원래 화면으로 돌아가는 것보다 낫다.
         final long ticket = ++hotspotReq;
         ui.postDelayed(() -> {
             if (ticket == hotspotReq && reservation == null) {
-                notice("핫스팟이 응답하지 않아요 — 설정에서 직접 켜 보세요");
+                notice(R.string.hotspot_no_response);
             }
         }, 12000);
         try {
@@ -1331,10 +1341,10 @@ public class MainActivity extends Activity {
                     if (cfg == null) {
                         // 설정을 못 읽으면 QR 은 없다. 그래도 핫스팟은 켜졌으니
                         // 어디서 비번을 보는지는 알려준다.
-                        notice("핫스팟 켜짐 — 비밀번호는 설정 › 핫스팟에서 확인하세요");
+                        notice(R.string.hotspot_on_check_settings);
                         showQr(null, null);
                     } else {
-                        notice("핫스팟을 켰어요");
+                        notice(R.string.hotspot_turned_on);
                         showQr(cfg[0], cfg[1]);
                     }
                 }
@@ -1345,18 +1355,18 @@ public class MainActivity extends Activity {
                     String why;
                     switch (reason) {
                         case WifiManager.LocalOnlyHotspotCallback.ERROR_NO_CHANNEL:
-                            why = "사용 가능한 채널 없음"; break;
+                            why = getString(R.string.hotspot_err_no_channel); break;
                         case WifiManager.LocalOnlyHotspotCallback.ERROR_GENERIC:
-                            why = "일반 오류"; break;
+                            why = getString(R.string.hotspot_err_generic); break;
                         case WifiManager.LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE:
-                            why = "이미 테더링 중일 수 있어요"; break;
+                            why = getString(R.string.hotspot_err_incompatible); break;
                         case WifiManager.LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED:
-                            why = "테더링이 허용되지 않음"; break;
+                            why = getString(R.string.hotspot_err_disallowed); break;
                         default:
-                            why = "알 수 없음(" + reason + ")";
+                            why = getString(R.string.hotspot_err_unknown, String.valueOf(reason));
                     }
-                    Log.w(CaptureService.TAG, "HOTSPOT failed: " + why);
-                    notice("핫스팟을 켜지 못했어요 — " + why);
+                    Log.w(CaptureService.TAG, "HOTSPOT failed: " + reason + " " + why);
+                    notice(getString(R.string.hotspot_failed, why));
                 }
 
                 @Override
@@ -1364,13 +1374,13 @@ public class MainActivity extends Activity {
                     Log.i(CaptureService.TAG, "HOTSPOT stopped");
                     reservation = null;
                     showQr(null, null);
-                    notice("핫스팟이 꺼졌어요");
+                    notice(R.string.hotspot_stopped);
                 }
             }, ui);
         } catch (Throwable t) {
             hotspotReq++;   // 감시 타이머 무효화
             Log.e(CaptureService.TAG, "HOTSPOT threw", t);
-            notice("핫스팟 호출 예외 — " + t);
+            notice(getString(R.string.hotspot_exception, String.valueOf(t)));
         }
     }
 
@@ -1414,10 +1424,8 @@ public class MainActivity extends Activity {
      * 루프를 끊는 것보다 그 상태를 못 만들게 하는 쪽이 맞다.
      */
     private void confirmStopSharing(final Runnable then) {
-        confirm("공유를 멈추고 들을까요?",
-                "공유하면서 동시에 들을 수는 없어요. 내보내는 소리와 듣는 소리가 서로 물려서 소리가 돌아요.\n\n"
-                        + "다시 공유하려면 화면 녹화 동의를 한 번 더 받아야 해요.",
-                "멈추고 듣기", false, () -> { stopSharing(); then.run(); });
+        confirm(R.string.share_switch_title, R.string.share_switch_body,
+                R.string.share_switch_ok, false, () -> { stopSharing(); then.run(); });
     }
 
     /**
@@ -1469,7 +1477,7 @@ public class MainActivity extends Activity {
                     }
                 }
             } catch (Exception e) {
-                ui.post(() -> notice("근처의 방을 찾을 수 없어요 — 방 코드로 들어가 보세요"));
+                ui.post(() -> notice(R.string.home_discovery_failed));
             } finally {
                 if (ds != null) ds.close();
                 // 쥔 채로 두면 화면을 꺼도 Wi-Fi 가 계속 깨어 있어 배터리를 먹는다.
