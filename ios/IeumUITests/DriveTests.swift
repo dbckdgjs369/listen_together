@@ -8,7 +8,7 @@ import XCTest
 /// 판정(소리가 맞게 나가는지)은 여기서 하지 않는다 — 맥이 /diag 와 /stream 으로 잰다.
 final class DriveTests: XCTestCase {
 
-    private let ieum = XCUIApplication(bundleIdentifier: "io.github.dbckdgjs369.ieum")
+    private let ieum = XCUIApplication(bundleIdentifier: "app.ieum")
     private let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
     private let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
 

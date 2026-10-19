@@ -7,7 +7,7 @@ android {
     compileSdk 36
 
     defaultConfig {
-        applicationId "io.github.dbckdgjs369.ieum"
+        applicationId "app.ieum"
         minSdk 29
         targetSdk 36
         versionCode 1

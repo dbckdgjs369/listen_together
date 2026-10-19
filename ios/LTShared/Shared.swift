@@ -5,7 +5,7 @@ import os
 /// 앱 본체와 확장이 같이 쓰는 것들.
 /// 확장은 별도 프로세스라 런타임에 아무것도 공유되지 않는다 — 소스만 공유한다.
 
-let log = OSLog(subsystem: "io.github.dbckdgjs369.ieum", category: "LT")
+let log = OSLog(subsystem: "app.ieum", category: "LT")
 
 /// 안드로이드판과 같은 포트를 쓴다. 클라이언트(브라우저·안드로이드 앱)를 고치지
 /// 않아도 아이폰 호스트에 그대로 붙는다.

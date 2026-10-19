@@ -34,7 +34,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             DispatchQueue.global().async {
                 guard let self else { return }
                 self.shutdown(farewell: 2)
-                let e = NSError(domain: "io.github.dbckdgjs369.ieum", code: 0,
+                let e = NSError(domain: "app.ieum", code: 0,
                                 userInfo: [NSLocalizedDescriptionKey: L.extStopped])
                 self.finishBroadcastWithError(e)
             }
